@@ -35,6 +35,9 @@ enum Cmd {
         /// Cache directory (default: a temp dir under target/)
         #[arg(long)]
         cache: Option<PathBuf>,
+        /// Do not read or write the index cache (always build)
+        #[arg(long)]
+        no_cache: bool,
     },
     /// Filters and sorts on an indexed file (builds or loads the cache
     /// first). Operations: `name|json Expr|sort cols` lines from --ops.
@@ -162,9 +165,11 @@ fn main() -> Result<()> {
             file,
             access,
             cache,
+            no_cache,
         } => {
             let cache = cache.unwrap_or_else(|| std::env::temp_dir().join("fhv-bench-cache"));
             let mut opts = OpenOptions::new(cache);
+            opts.use_cache = !no_cache;
             opts.access = match access {
                 Acc::Mmap => Access::Mmap,
                 Acc::Pread => Access::Pread,

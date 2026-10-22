@@ -1,0 +1,9 @@
+# Operations measured by scripts/bench-gate.sh (instruction counts, 1 thread).
+filter {"pred":{"target":{"column":"EventId"},"op":"in","value":["4624","4625"]}}
+filter {"pred":{"target":{"column":"Payload"},"op":"contains","value":"whoami"}}
+filter {"pred":{"target":"any","op":"contains","value":"198.51.100.7"}}
+filter {"pred":{"target":{"column":"TimeCreated"},"op":"between","value":["2024-03-10","2024-03-12"]}}
+reset
+sort TimeCreated:desc
+sort RecordNumber
+sort PayloadData2
