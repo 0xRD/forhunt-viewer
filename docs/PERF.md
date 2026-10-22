@@ -174,3 +174,33 @@ Sort iterations on hayabusa `Details`:
 - Tried and reverted:
   - a plain comparison sort of borrowed cells: 26.8 s;
   - cell reads in file order: no change.
+
+## Phase 4: scrolling in the real app (2026-10-22)
+
+Same scroll pattern as the phase 1 spike, in the application on real files.
+The pattern is 40 frames of 3 rows each, then 10 jumps across the file. It
+starts once the index is ready. Rows are read from the file each frame
+(positional reads), with all MVP chrome visible: toolbar, filter row and
+detail pane. Machine M1, Xvfb 1920x1080, llvmpipe software OpenGL, window
+1500x900, vsync off.
+
+```
+FHV_BENCH_SCROLL=1000 DISPLAY=:99 target/release/forhunt-viewer bench-data/<file>.csv
+```
+
+| File | Rows | ui_ms p50 / p99 / max | frame CPU ms p50 / p99 / max |
+|---|---:|---|---|
+| forhunt-5g | 8 667 136 | 0.66 / 3.49 / 6.37 | 4.41 / 10.08 / 13.04 |
+| hayabusa-5g | 20 332 544 | 0.73 / 5.55 / 6.20 | 4.71 / 11.25 / 14.38 |
+
+Every frame is under the 16.7 ms budget of 60 fps, even with software
+rendering.
+
+Interactive check (xdotool on the release build, forhunt-5g, index cached):
+- `Channel contains "secur"` (dictionary): 4 194 304 rows in 15 ms.
+- Sort `EventId` desc: 105 ms. Sort `Channel`: 115 ms.
+
+UI problems this check found, both fixed:
+- Global search started a scan per keystroke. Input is now debounced
+  (250 ms) and superseded work is cancelled.
+- The filter chip line made the grid jump.

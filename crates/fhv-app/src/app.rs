@@ -87,6 +87,8 @@ struct FilterEdit {
     value_search: String,
     /// Value list selection (dictionary columns): checked values.
     checked: Vec<bool>,
+    /// Where it was opened from (the window starts there).
+    at: Option<egui::Pos2>,
 }
 
 struct ExportDlg {
@@ -110,6 +112,8 @@ pub struct App {
     pub(crate) help: bool,
     focus_search: bool,
     style: Style,
+    /// Hidden scroll benchmark (env FHV_BENCH_SCROLL=frames): frame times.
+    bench: Option<(usize, Vec<f64>, Vec<f64>)>,
 }
 
 impl App {
@@ -145,6 +149,10 @@ impl App {
             evidence_dlg: None,
             help: false,
             focus_search: false,
+            bench: std::env::var("FHV_BENCH_SCROLL")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .map(|n| (n, Vec::new(), Vec::new())),
             style: Style {
                 filter_h: 24.0,
                 ..Style::default()
@@ -992,6 +1000,7 @@ impl App {
             b: String::new(),
             value_search: String::new(),
             checked,
+            at: None,
         });
     }
 
@@ -1006,7 +1015,12 @@ impl App {
         let c = fe.col;
         let mut open = true;
         let mut changed = false;
+        if fe.at.is_none() {
+            fe.at = ctx.pointer_latest_pos().or(Some(egui::pos2(200.0, 150.0)));
+        }
         egui::Window::new(format!("Filter: {}", t.table.columns[c]))
+            .id(egui::Id::unique(("filter-edit", c)))
+            .default_pos(fe.at.unwrap_or_default())
             .open(&mut open)
             .default_width(380.0)
             .show(ctx, |ui| {
@@ -1573,8 +1587,10 @@ fn fmt_bytes(n: u64) -> String {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let t_frame = std::time::Instant::now();
+        self.bench_step(&ctx, frame);
         // Files dropped on the window.
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -1620,5 +1636,63 @@ impl eframe::App for App {
         self.columns_window(&ctx);
         self.export_window(&ctx);
         self.small_dialogs(&ctx);
+        if let Some((_, ui_ms, _)) = &mut self.bench
+            && self
+                .tabs
+                .first()
+                .is_some_and(|t| t.ready() && t.job.is_none())
+        {
+            ui_ms.push(t_frame.elapsed().as_secs_f64() * 1e3);
+        }
+    }
+}
+
+impl App {
+    /// Same pattern as the phase 1 spike: 40 frames of smooth scrolling (3
+    /// rows/frame), then 10 jumps, once the first tab is ready.
+    fn bench_step(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        let Some((total, ui_ms, cpu_ms)) = &mut self.bench else {
+            return;
+        };
+        let Some(t) = self.tabs.first_mut() else {
+            return;
+        };
+        if !(t.ready() && t.job.is_none()) {
+            return;
+        }
+        let k = ui_ms.len();
+        if k > 10
+            && let Some(c) = frame.info().cpu_usage
+        {
+            cpu_ms.push(c as f64 * 1e3);
+        }
+        let n = t.view.len().max(1) as f64;
+        if k % 50 < 40 {
+            t.grid.top += 3.0;
+        } else {
+            t.grid.top = (k as f64 * 7_919_993.0) % n;
+        }
+        ctx.request_repaint();
+        if k == *total {
+            let pct = |v: &mut Vec<f64>, p: f64| {
+                v.sort_by(f64::total_cmp);
+                v.get(((v.len().max(1) - 1) as f64 * p) as usize)
+                    .copied()
+                    .unwrap_or(0.0)
+            };
+            let mut u = ui_ms[10..].to_vec();
+            println!(
+                "frames={} rows={} ui_ms p50={:.3} p99={:.3} max={:.3} | cpu_usage_ms p50={:.3} p99={:.3} max={:.3}",
+                u.len(),
+                t.view.len(),
+                pct(&mut u, 0.5),
+                pct(&mut u, 0.99),
+                pct(&mut u, 1.0),
+                pct(cpu_ms, 0.5),
+                pct(cpu_ms, 0.99),
+                pct(cpu_ms, 1.0)
+            );
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 }

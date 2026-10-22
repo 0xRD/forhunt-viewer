@@ -48,7 +48,7 @@ fn main() -> eframe::Result {
             .with_drag_and_drop(true),
         ..Default::default()
     };
-    opts.glow_options.vsync = bench.is_none();
+    opts.glow_options.vsync = bench.is_none() && std::env::var_os("FHV_BENCH_SCROLL").is_none();
     eframe::run_native(
         "forhunt-viewer",
         opts,
