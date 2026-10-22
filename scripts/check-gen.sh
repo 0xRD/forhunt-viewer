@@ -24,7 +24,7 @@ sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 
   "$GEN" gen --layout forhunt --rows 20000 --seed 7 --crlf --delim ';' -o "$OUT/crlf.csv" 2>/dev/null
   echo "$(sha "$OUT/crlf.csv")  forhunt-crlf-semicolon"
   "$GEN" edge --out "$OUT/edge" 2>/dev/null
-  for f in $(cd "$OUT/edge" && ls | sort); do
+  for f in $(cd "$OUT/edge" && ls | LC_ALL=C sort); do
     echo "$(sha "$OUT/edge/$f")  edge/$f"
   done
 } > "$OUT/checksums.txt"
@@ -33,6 +33,6 @@ if [ "${1:-}" = "--update" ]; then
   cp "$OUT/checksums.txt" tools/csv-gen/checksums.txt
   echo "updated tools/csv-gen/checksums.txt"
 else
-  diff -u tools/csv-gen/checksums.txt "$OUT/checksums.txt"
+  diff -u --strip-trailing-cr tools/csv-gen/checksums.txt "$OUT/checksums.txt"
   echo "csv-gen output matches checksums.txt"
 fi
