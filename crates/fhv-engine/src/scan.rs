@@ -55,6 +55,10 @@ pub struct Tables {
     /// Packed state -> bitmask of runs (bit i = run started in state i)
     /// for which a newline ends a row (run not inside quotes).
     end_mask: [u8; 256],
+    delim: u8,
+    /// Quote byte, or the delimiter again when there is no quote char (so
+    /// the byte search below stays branch-free).
+    quote: u8,
 }
 
 impl Tables {
@@ -88,6 +92,8 @@ impl Tables {
             class,
             packed,
             end_mask,
+            delim,
+            quote: quote.unwrap_or(delim),
         }
     }
 
@@ -115,7 +121,22 @@ impl ChunkScan {
     }
 }
 
+/// Bit 7 of each byte of `w` is set where the byte equals `b` (exact, no
+/// false positives).
+#[inline(always)]
+fn eq_mask(w: u64, b: u8) -> u64 {
+    const LO7: u64 = 0x7F7F_7F7F_7F7F_7F7F;
+    let x = w ^ (0x0101_0101_0101_0101 * b as u64);
+    !(((x & LO7).wrapping_add(LO7)) | x | LO7)
+}
+
 /// Runs the packed machine over `chunk` (< 4 GiB).
+///
+/// Only delimiters, quotes and newlines change the packed state in a way
+/// that matters: a run of other bytes maps it through the "other"
+/// transition, which is idempotent (S->U, U->U, Q->Q, E->U). So the loop
+/// finds special bytes eight at a time (SWAR) and applies "other" once per
+/// gap, instead of one dependent table lookup per byte.
 pub fn scan_chunk(t: &Tables, chunk: &[u8]) -> ChunkScan {
     debug_assert!(chunk.len() < u32::MAX as usize);
     let mut out = ChunkScan {
@@ -123,6 +144,51 @@ pub fn scan_chunk(t: &Tables, chunk: &[u8]) -> ChunkScan {
         mask: Vec::with_capacity(chunk.len() / 128),
         exit: 0,
     };
+    let mut v = PACKED_START;
+    // Index just past the last byte fed to the machine.
+    let mut fed = 0usize;
+    let mut special = |i: usize, v: &mut u8, fed: &mut usize, out: &mut ChunkScan| {
+        if i > *fed {
+            *v = t.packed[(*v as usize) << 2 | C_OTHER as usize];
+        }
+        let c = t.class[chunk[i] as usize];
+        if c == C_NL {
+            let m = t.end_mask[*v as usize];
+            if m != 0 {
+                out.pos.push(i as u32);
+                out.mask.push(m);
+            }
+        }
+        *v = t.packed[(*v as usize) << 2 | c as usize];
+        *fed = i + 1;
+    };
+    let mut words = chunk.chunks_exact(8);
+    let mut base = 0usize;
+    for w in &mut words {
+        let w = u64::from_le_bytes(w.try_into().unwrap_or([0; 8]));
+        let mut m = eq_mask(w, b'\n') | eq_mask(w, t.delim) | eq_mask(w, t.quote);
+        while m != 0 {
+            let j = (m.trailing_zeros() / 8) as usize;
+            special(base + j, &mut v, &mut fed, &mut out);
+            m &= m - 1;
+        }
+        base += 8;
+    }
+    for (j, &b) in words.remainder().iter().enumerate() {
+        if b == b'\n' || b == t.delim || b == t.quote {
+            special(base + j, &mut v, &mut fed, &mut out);
+        }
+    }
+    if chunk.len() > fed {
+        v = t.packed[(v as usize) << 2 | C_OTHER as usize];
+    }
+    out.exit = v;
+    out
+}
+
+/// Byte-at-a-time version of [`scan_chunk`] (reference for tests).
+pub fn scan_chunk_simple(t: &Tables, chunk: &[u8]) -> ChunkScan {
+    let mut out = ChunkScan::default();
     let mut v = PACKED_START;
     for (i, &b) in chunk.iter().enumerate() {
         let c = t.class[b as usize];
@@ -266,6 +332,31 @@ mod tests {
             s = step(s, c);
         }
         ends
+    }
+
+    #[test]
+    fn swar_scan_matches_simple() {
+        let mut x = 0x1234_5678u64;
+        for len in 0..300 {
+            for (d, q) in [(b',', Some(b'"')), (b';', None)] {
+                let t = Tables::new(d, q);
+                let data: Vec<u8> = (0..len)
+                    .map(|_| {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        b"ab,;\"\n\r\x00\xff"[(x % 9) as usize]
+                    })
+                    .collect();
+                let a = scan_chunk(&t, &data);
+                let b = scan_chunk_simple(&t, &data);
+                assert_eq!(
+                    (a.pos, a.mask, a.exit),
+                    (b.pos, b.mask, b.exit),
+                    "len {len}"
+                );
+            }
+        }
     }
 
     #[test]

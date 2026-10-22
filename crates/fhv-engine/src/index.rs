@@ -253,7 +253,10 @@ pub fn build_with(
         bad: Vec::new(),
         rows: 0,
     };
-    for w in chunks.chunks(window) {
+    // The first window is a single chunk so the first rows show at once.
+    let first = chunks.len().min(1);
+    let windows = std::iter::once(&chunks[..first]).chain(chunks[first..].chunks(window));
+    for w in windows.filter(|w| !w.is_empty()) {
         if progress.cancelled() {
             return Err(Error::Cancelled);
         }
@@ -296,6 +299,9 @@ pub fn build_with(
     publish(out, &mut fx, len);
     let mut ix = out.write().map_err(|_| Error::Poisoned)?;
     ix.end = len;
+    ix.deltas.shrink_to_fit();
+    ix.bases.shrink_to_fit();
+    ix.wide.shrink_to_fit();
     ix.complete = true;
     progress.rows.store(fx.rows, Ordering::Relaxed);
     Ok(())

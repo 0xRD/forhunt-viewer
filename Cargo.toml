@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/fhv-engine", "crates/fhv-app", "tools/csv-gen"]
+members = ["crates/fhv-engine", "crates/fhv-app", "tools/csv-gen", "tools/fhv-bench"]
 default-members = ["crates/fhv-app"]
 
 [workspace.package]

@@ -1217,6 +1217,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fhv-bench"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "fhv-engine",
+]
+
+[[package]]
 name = "fhv-engine"
 version = "0.1.0"
 dependencies = [

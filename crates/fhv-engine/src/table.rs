@@ -34,7 +34,7 @@ impl OpenOptions {
     pub fn new(cache_dir: impl Into<PathBuf>) -> Self {
         OpenOptions {
             cache_dir: cache_dir.into(),
-            access: Access::Mmap,
+            access: Access::Pread,
             dialect: None,
             encoding: None,
         }

@@ -1,0 +1,16 @@
+[package]
+name = "fhv-bench"
+description = "Headless benchmarks of the forhunt-viewer engine on real-size files"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+fhv-engine.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true
