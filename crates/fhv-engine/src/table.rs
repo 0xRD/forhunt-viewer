@@ -28,6 +28,8 @@ pub struct OpenOptions {
     pub dialect: Option<Dialect>,
     /// Overrides the detected encoding (a BOM is still skipped).
     pub encoding: Option<Encoding>,
+    /// Load and save the index cache.
+    pub use_cache: bool,
 }
 
 impl OpenOptions {
@@ -37,6 +39,7 @@ impl OpenOptions {
             access: Access::Pread,
             dialect: None,
             encoding: None,
+            use_cache: true,
         }
     }
 }
@@ -52,6 +55,10 @@ pub struct Table {
     source: OnceLock<Source>,
     index: RwLock<RowIndex>,
     pub progress: Progress,
+    /// Content key of the input + options (index cache, transcoded copy).
+    key: String,
+    /// The index came from the cache.
+    pub from_cache: std::sync::atomic::AtomicBool,
 }
 
 /// Decoded cells of a range of rows, for display.
@@ -211,7 +218,15 @@ impl Table {
             (1..=n).map(|i| format!("Column {i}")).collect()
         };
 
+        let key = {
+            let mut h = blake3::Hasher::new();
+            h.update(file_key(path)?.as_bytes());
+            h.update(format!("{:?}{:?}{:?}", opts.dialect, opts.encoding, encoding).as_bytes());
+            h.finalize().to_hex()[..32].to_string()
+        };
         let table = Table {
+            key,
+            from_cache: Default::default(),
             path: path.to_path_buf(),
             file_len,
             encoding,
@@ -251,6 +266,11 @@ impl Table {
     }
 
     fn build_inner(&self, chunk: u64) -> Result<()> {
+        if self.opts.use_cache && self.load_cache().is_ok() {
+            self.from_cache
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            return Ok(());
+        }
         if self.source.get().is_none() {
             let out = self.transcode()?;
             let src = Source::open(&out, self.opts.access, 0)?;
@@ -259,13 +279,86 @@ impl Table {
         let src = self.source()?;
         self.progress
             .set_phase(Phase::Indexing, src.len - src.data_start);
-        index::build_with(src, &self.tables, &self.index, &self.progress, chunk)
+        index::build_with(src, &self.tables, &self.index, &self.progress, chunk)?;
+        if self.opts.use_cache {
+            // A cache that cannot be written only costs a rebuild next time.
+            let _ = self.save_cache();
+        }
+        Ok(())
+    }
+
+    fn cache_path(&self) -> PathBuf {
+        crate::cache::path_for(&self.opts.cache_dir, &self.key)
+    }
+
+    fn transcoded_path(&self) -> PathBuf {
+        self.opts
+            .cache_dir
+            .join("transcoded")
+            .join(format!("{}.utf8.csv", self.key))
+    }
+
+    fn save_cache(&self) -> Result<()> {
+        let ix = self.index();
+        let mut w = crate::cache::Writer::new();
+        w.begin(b"META\0\0\0\0");
+        w.bytes(self.key.as_bytes());
+        w.u64(self.file_len);
+        w.u64(ix.len());
+        w.u64(self.columns.len() as u64);
+        w.begin(b"ROWS\0\0\0\0");
+        let (bases, deltas, wide, pending, end) = ix.to_parts();
+        w.u64s(&bases);
+        w.u32s(deltas);
+        w.u64s(wide);
+        w.u64s(pending);
+        w.u64(end);
+        w.bitmap(&ix.bad);
+        drop(ix);
+        w.finish(&self.cache_path())
+    }
+
+    fn load_cache(&self) -> Result<()> {
+        let r = crate::cache::Reader::open(&self.cache_path())?;
+        let mut m = r.section(b"META\0\0\0\0")?;
+        let key_ok = m.bytes()? == self.key.as_bytes();
+        let len_ok = m.u64()? == self.file_len;
+        let _rows = m.u64()?;
+        let cols_ok = m.u64()? == self.columns.len() as u64;
+        if !(key_ok && len_ok && cols_ok) {
+            return Err(Error::Cache("key mismatch".into()));
+        }
+        if self.source.get().is_none() {
+            let t = self.transcoded_path();
+            if !t.exists() {
+                return Err(Error::Cache("transcoded copy missing".into()));
+            }
+            let _ = self.source.set(Source::open(&t, self.opts.access, 0)?);
+        }
+        let mut c = r.section(b"ROWS\0\0\0\0")?;
+        let ix = RowIndex::from_parts(
+            c.u64s()?,
+            c.u32s()?,
+            c.u64s()?,
+            c.u64s()?,
+            c.u64()?,
+            c.bitmap()?,
+        )?;
+        if ix.len() > 0 && ix.range(ix.len() - 1).end > self.source()?.len {
+            return Err(Error::Cache("offsets past end of file".into()));
+        }
+        self.progress
+            .rows
+            .store(ix.len(), std::sync::atomic::Ordering::Relaxed);
+        *self.index.write().map_err(|_| Error::Poisoned)? = ix;
+        Ok(())
     }
 
     fn transcode(&self) -> Result<PathBuf> {
-        let dir = self.opts.cache_dir.join("transcoded");
-        fs::create_dir_all(&dir)?;
-        let out = dir.join(format!("{}.utf8.csv", file_key(&self.path)?));
+        let out = self.transcoded_path();
+        if let Some(dir) = out.parent() {
+            fs::create_dir_all(dir)?;
+        }
         if out.exists() {
             return Ok(out);
         }

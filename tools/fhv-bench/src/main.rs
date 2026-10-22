@@ -90,7 +90,8 @@ fn main() -> Result<()> {
             let ix_bytes = table.index().heap_bytes();
             let mb = table.file_len as f64 / 1e6;
             println!(
-                "file={} bytes={} rows={} cols={} encoding={} access={:?} open_ms={:.1} first_rows_ms={:.1} index_s={:.3} mb_per_s={:.0} index_mib={:.1} index_pct_of_file={:.2} {}",
+                "from_cache={} file={} bytes={} rows={} cols={} encoding={} access={:?} open_ms={:.1} first_rows_ms={:.1} index_s={:.3} mb_per_s={:.0} index_mib={:.1} index_pct_of_file={:.2} {}",
+                table.from_cache.load(std::sync::atomic::Ordering::Relaxed),
                 file.display(),
                 table.file_len,
                 table.row_count(),

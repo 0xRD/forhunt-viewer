@@ -66,7 +66,9 @@ fn edge_cases_match_golden() {
         let t = Table::open(&path, OpenOptions::new(dir.path().join("cache"))).unwrap();
         t.build().unwrap();
         // Small chunks too: results must not depend on chunking.
-        let t2 = Table::open(&path, OpenOptions::new(dir.path().join("cache"))).unwrap();
+        let mut no_cache = OpenOptions::new(dir.path().join("cache"));
+        no_cache.use_cache = false;
+        let t2 = Table::open(&path, no_cache).unwrap();
         t2.build_chunked(7).unwrap();
         let got = format!("# {}: {}\n{}", case.name, case.what, summarise(&t));
         assert_eq!(

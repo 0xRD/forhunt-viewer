@@ -2,6 +2,7 @@
 //! indexes rows in one parallel pass, and serves rows, filters and sorts
 //! without loading the file into memory.
 
+pub mod cache;
 pub mod dialect;
 pub mod index;
 pub mod progress;

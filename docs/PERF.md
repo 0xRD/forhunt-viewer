@@ -75,3 +75,17 @@ the page cache (the two corpora together are 10.7 GB on a 15 GiB machine).
 
 Reading: cold pread indexing (2.6 s) is within 7 % of `cat` (2.4 s), so it is
 I/O-bound. The index is ~4 B/row. pread is the default (D-008).
+
+### Reopen with the index cache
+
+`fhv-bench index FILE` three times with an empty cache dir (first run builds,
+then two cache hits):
+
+| File | build | reopen (index loaded, 100 rows decoded) | cache file |
+|---|---:|---:|---:|
+| hayabusa-5g (20.3 M rows) | 10.64 s* | 0.488 s / 0.448 s | 78 MiB |
+| forhunt-5g (8.7 M rows) | 2.26 s | 0.058 s / 0.136 s | 34 MiB |
+
+\* page cache evicted by the previous run on the other 5 GB file; the cloud
+disk then delivered ~0.5 GB/s. The reopen time is reading + BLAKE3-checking
++ decoding the cache file; target < 1 s met.
