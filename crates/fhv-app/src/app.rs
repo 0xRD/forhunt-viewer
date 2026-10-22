@@ -666,7 +666,7 @@ impl App {
                 self.note_edit = Some((row, t.tags.get(&row).cloned().unwrap_or_default()));
             }
             if ui.button("copy row").clicked() {
-                ui.ctx().copy_text(row_tsv(t, &fields));
+                ui.ctx().copy_text(row_tsv(t, fields));
             }
         });
         if let Some(note) = t.tags.get(&row).filter(|n| !n.is_empty()) {
