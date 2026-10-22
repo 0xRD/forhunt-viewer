@@ -216,7 +216,69 @@ pub struct Span {
 
 /// Splits one row (without its line terminator) into fields.
 /// Returns the number of fields (`out` holds them).
+///
+/// Like [`scan_chunk`], only delimiter and quote bytes are visited (found 8
+/// at a time); a gap of other bytes applies the idempotent "other"
+/// transition once. Newlines inside a row can only be inside quotes, where
+/// they are data, so they count as other bytes.
 pub fn split_row(t: &Tables, row: &[u8], out: &mut Vec<Span>) -> usize {
+    out.clear();
+    let mut start = 0usize;
+    let mut quoted = false;
+    let mut state = S;
+    let mut fed = 0usize;
+    let mut special = |i: usize, state: &mut u8, fed: &mut usize| {
+        if i > *fed {
+            *state = step(*state, C_OTHER);
+        }
+        *fed = i + 1;
+        let c = t.class[row[i] as usize];
+        if c == C_DELIM && *state != Q {
+            out.push(Span {
+                start: start as u32,
+                end: i as u32,
+                quoted,
+            });
+            start = i + 1;
+            quoted = false;
+            *state = S;
+            return;
+        }
+        if c == C_QUOTE && *state == S {
+            quoted = true;
+        }
+        *state = step(*state, c);
+    };
+    let mut words = row.chunks_exact(8);
+    let mut base = 0usize;
+    for w in &mut words {
+        let w = u64::from_le_bytes(w.try_into().unwrap_or([0; 8]));
+        let mut m = eq_mask(w, t.delim) | eq_mask(w, t.quote);
+        while m != 0 {
+            special(
+                base + (m.trailing_zeros() / 8) as usize,
+                &mut state,
+                &mut fed,
+            );
+            m &= m - 1;
+        }
+        base += 8;
+    }
+    for (j, &b) in words.remainder().iter().enumerate() {
+        if b == t.delim || b == t.quote {
+            special(base + j, &mut state, &mut fed);
+        }
+    }
+    out.push(Span {
+        start: start as u32,
+        end: row.len() as u32,
+        quoted,
+    });
+    out.len()
+}
+
+/// Byte-at-a-time [`split_row`] (reference for tests).
+pub fn split_row_simple(t: &Tables, row: &[u8], out: &mut Vec<Span>) -> usize {
     out.clear();
     let mut start = 0usize;
     let mut quoted = false;
@@ -237,8 +299,6 @@ pub fn split_row(t: &Tables, row: &[u8], out: &mut Vec<Span>) -> usize {
         if c == C_QUOTE && state == S {
             quoted = true;
         }
-        // Newlines inside quoted fields are data; outside quotes a row never
-        // contains one (the index split there), so treat them as text.
         let c = if c == C_NL { C_OTHER } else { c };
         state = step(state, c);
     }
@@ -248,6 +308,75 @@ pub fn split_row(t: &Tables, row: &[u8], out: &mut Vec<Span>) -> usize {
         quoted,
     });
     out.len()
+}
+
+/// Span of field `col` of a row, or `None` when the row has fewer fields.
+/// Rows without any quote byte are split with `memchr` (the common case).
+pub fn nth_field(t: &Tables, row: &[u8], col: usize) -> Option<Span> {
+    if t.quote == t.delim || memchr::memchr(t.quote, row).is_none() {
+        let mut start = 0usize;
+        let mut it = memchr::memchr_iter(t.delim, row);
+        for _ in 0..col {
+            start = it.next()? + 1;
+        }
+        let end = it.next().unwrap_or(row.len());
+        return Some(Span {
+            start: start as u32,
+            end: end as u32,
+            quoted: false,
+        });
+    }
+    let mut field = 0usize;
+    let mut start = 0usize;
+    let mut quoted = false;
+    let mut state = S;
+    for (i, &b) in row.iter().enumerate() {
+        let c = t.class[b as usize];
+        if c == C_DELIM && state != Q {
+            if field == col {
+                return Some(Span {
+                    start: start as u32,
+                    end: i as u32,
+                    quoted,
+                });
+            }
+            field += 1;
+            start = i + 1;
+            quoted = false;
+            state = S;
+            continue;
+        }
+        if c == C_QUOTE && state == S {
+            quoted = true;
+        }
+        let c = if c == C_NL { C_OTHER } else { c };
+        state = step(state, c);
+    }
+    (field == col).then_some(Span {
+        start: start as u32,
+        end: row.len() as u32,
+        quoted,
+    })
+}
+
+/// Number of fields of a row.
+pub fn count_fields(t: &Tables, row: &[u8]) -> usize {
+    if t.quote == t.delim || memchr::memchr(t.quote, row).is_none() {
+        return memchr::memchr_iter(t.delim, row).count() + 1;
+    }
+    let mut n = 1;
+    let mut state = S;
+    for &b in row {
+        let c = t.class[b as usize];
+        if c == C_DELIM && state != Q {
+            n += 1;
+            state = S;
+            continue;
+        }
+        let c = if c == C_NL { C_OTHER } else { c };
+        state = step(state, c);
+    }
+    n
 }
 
 /// Decodes a quoted field: drops the opening quote, the closing quote and
@@ -332,6 +461,30 @@ mod tests {
             s = step(s, c);
         }
         ends
+    }
+
+    #[test]
+    fn nth_field_and_count_match_split() {
+        let t = Tables::new(b',', Some(b'"'));
+        for row in [
+            "a,b,c",
+            "",
+            ",",
+            "\"x,y\",z",
+            "a\"b,\"c\"\"d\",e",
+            "\"open,x",
+        ] {
+            let mut spans = Vec::new();
+            let n = split_row(&t, row.as_bytes(), &mut spans);
+            assert_eq!(count_fields(&t, row.as_bytes()), n, "{row}");
+            for c in 0..n + 2 {
+                assert_eq!(
+                    nth_field(&t, row.as_bytes(), c),
+                    spans.get(c).copied(),
+                    "{row} col {c}"
+                );
+            }
+        }
     }
 
     #[test]

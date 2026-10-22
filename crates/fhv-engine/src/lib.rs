@@ -3,18 +3,25 @@
 //! without loading the file into memory.
 
 pub mod cache;
+pub mod columns;
 pub mod dialect;
+pub mod filter;
 pub mod index;
 pub mod progress;
 pub mod scan;
+pub mod sort;
 pub mod source;
 pub mod table;
 pub mod time;
+pub mod view;
 
 pub use dialect::{Dialect, Encoding};
+pub use filter::{Engine, Expr, Op, Pred, Target};
 pub use progress::{Phase, Progress};
+pub use sort::SortKey;
 pub use source::Access;
 pub use table::{OpenOptions, Rows, Table};
+pub use view::{Query, View};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -6,6 +6,9 @@ crlf: false
 columns (1): ["value"]
 rows: 3
 structural_bad: []
+kinds: Text+dict(3)
+primary_time: None
+ragged: []
 row 0 (1 fields): "alpha"
 row 1 (1 fields): "beta"
 row 2 (1 fields): "gamma"

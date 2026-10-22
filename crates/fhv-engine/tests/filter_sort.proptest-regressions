@@ -1,0 +1,12 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6b1115080c46644c1cd3f233ec5ea957e6a34317cdcb788a20e43d90fe3b2ef9 # shrinks to keys = [(0, false)], filt = None
+cc c1660ef6fa3d2a8f335a0e1f98475a82d21b602c18a154d9d688d3bcf9fda703 # shrinks to e = Pred(Pred { target: Column(0), op: Equals("alpha"), case_sensitive: false })
+cc db414aee1cf03dd2c857633e8697bf8720ccb936cb7c55df8dceb13f50a905aa # shrinks to e = Or([Pred(Pred { target: Column(2), op: Between("2024-03-01 00:00:00", "0"), case_sensitive: false })])
+cc f7c2610e74cfa7f768460b54e8515aee173158ecc389ab5ca9a83ea68d5c0a5d # shrinks to keys = [(4, false), (0, false)], filt = None
+cc ec4350a0a9e8c9a4bc8f6000bfe87ffeeb7a276442c006f2213108002c82a60f # shrinks to e = And([Pred(Pred { target: Any, op: Le("2024-03-01 00:00:00"), case_sensitive: false })])
+cc 86f2490abf6923c3083077bc33f6225e62302dff5afddd675d36f4dc52089fd8 # shrinks to e = And([Pred(Pred { target: Column(0), op: Le("alpha"), case_sensitive: true })])

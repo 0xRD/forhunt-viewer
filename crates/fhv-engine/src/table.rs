@@ -6,8 +6,9 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{OnceLock, RwLock, RwLockReadGuard};
+use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard};
 
+use crate::columns::{self, Columns};
 use crate::dialect::{self, Dialect, Encoding};
 use crate::index::{self, RowIndex};
 use crate::progress::{Phase, Progress};
@@ -59,6 +60,8 @@ pub struct Table {
     key: String,
     /// The index came from the cache.
     pub from_cache: std::sync::atomic::AtomicBool,
+    /// Column indexes, once built.
+    col_index: RwLock<Option<Arc<Columns>>>,
 }
 
 /// Decoded cells of a range of rows, for display.
@@ -94,6 +97,45 @@ impl Rows {
 
     pub fn contains(&self, row: u64) -> bool {
         row >= self.first && row < self.first + self.len() as u64
+    }
+}
+
+/// Contiguous data rows read in one go (see [`Table::par_blocks`]).
+pub struct Block<'a> {
+    /// First data row of the block.
+    pub first: u64,
+    base: u64,
+    /// Row start offsets plus the end of the last row.
+    offs: &'a [u64],
+    bytes: &'a [u8],
+}
+
+impl<'a> Block<'a> {
+    pub fn len(&self) -> usize {
+        self.offs.len() - 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Bytes of the k-th row of the block, without line terminator.
+    #[inline]
+    pub fn row(&self, k: usize) -> &'a [u8] {
+        let s = (self.offs[k] - self.base) as usize;
+        let e = (self.offs[k + 1] - self.base) as usize;
+        trim_eol(&self.bytes[s..e])
+    }
+
+    /// All bytes of the block (rows with terminators).
+    pub fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// Row (k) containing byte position `pos` of [`Block::bytes`].
+    pub fn row_at(&self, pos: usize) -> usize {
+        let abs = self.base + pos as u64;
+        self.offs.partition_point(|&o| o <= abs) - 1
     }
 }
 
@@ -227,6 +269,7 @@ impl Table {
         let table = Table {
             key,
             from_cache: Default::default(),
+            col_index: RwLock::new(None),
             path: path.to_path_buf(),
             file_len,
             encoding,
@@ -280,6 +323,8 @@ impl Table {
         self.progress
             .set_phase(Phase::Indexing, src.len - src.data_start);
         index::build_with(src, &self.tables, &self.index, &self.progress, chunk)?;
+        let cols = columns::build(self)?;
+        *self.col_index.write().map_err(|_| Error::Poisoned)? = Some(Arc::new(cols));
         if self.opts.use_cache {
             // A cache that cannot be written only costs a rebuild next time.
             let _ = self.save_cache();
@@ -315,6 +360,10 @@ impl Table {
         w.u64(end);
         w.bitmap(&ix.bad);
         drop(ix);
+        if let Some(cols) = self.column_index() {
+            w.begin(b"COLS\0\0\0\0");
+            save_columns(&mut w, &cols);
+        }
         w.finish(&self.cache_path())
     }
 
@@ -347,10 +396,16 @@ impl Table {
         if !ix.is_empty() && ix.range(ix.len() - 1).end > self.source()?.len {
             return Err(Error::Cache("offsets past end of file".into()));
         }
+        let cols = load_columns(
+            &mut r.section(b"COLS\0\0\0\0")?,
+            self.columns.len(),
+            ix.len(),
+        )?;
         self.progress
             .rows
             .store(ix.len(), std::sync::atomic::Ordering::Relaxed);
         *self.index.write().map_err(|_| Error::Poisoned)? = ix;
+        *self.col_index.write().map_err(|_| Error::Poisoned)? = Some(Arc::new(cols));
         Ok(())
     }
 
@@ -402,6 +457,11 @@ impl Table {
         self.source
             .get()
             .ok_or_else(|| Error::Other("file not ready".into()))
+    }
+
+    /// Column indexes (None until `build` has finished them).
+    pub fn column_index(&self) -> Option<Arc<Columns>> {
+        self.col_index.read().ok().and_then(|g| g.clone())
     }
 
     pub fn index(&self) -> RwLockReadGuard<'_, RowIndex> {
@@ -500,6 +560,82 @@ impl Table {
         Ok(())
     }
 
+    /// Runs `map` over blocks of data rows in parallel and feeds the results
+    /// to `consume` in row order. Memory is bounded by a window of blocks;
+    /// cancellation (`progress.cancel()`) is checked between windows.
+    /// Requires a complete row index.
+    pub fn par_blocks<T: Send>(
+        &self,
+        rows: Range<u64>,
+        block_rows: u64,
+        map: impl Fn(&Block<'_>) -> T + Sync,
+        consume: impl FnMut(u64, T) -> Result<()>,
+    ) -> Result<()> {
+        let blocks: Vec<Range<u64>> = (rows.start..rows.end)
+            .step_by(block_rows.max(1) as usize)
+            .map(|s| s..(s + block_rows).min(rows.end))
+            .collect();
+        self.par_block_list(&blocks, map, consume)
+    }
+
+    /// [`Table::par_blocks`] over the blocks of `block_rows` rows that hold
+    /// at least one row of `set` (other blocks are not read).
+    pub fn par_blocks_of(&self, set: &roaring::RoaringBitmap, block_rows: u64) -> Vec<Range<u64>> {
+        let n = self.row_count();
+        (0..n)
+            .step_by(block_rows.max(1) as usize)
+            .map(|s| s..(s + block_rows).min(n))
+            .filter(|r| set.range_cardinality(r.start as u32..r.end as u32) > 0)
+            .collect()
+    }
+
+    /// Runs `map` over the given row ranges (in order, non-empty).
+    pub fn par_block_list<T: Send>(
+        &self,
+        blocks: &[Range<u64>],
+        map: impl Fn(&Block<'_>) -> T + Sync,
+        mut consume: impl FnMut(u64, T) -> Result<()>,
+    ) -> Result<()> {
+        use rayon::prelude::*;
+        let src = self.source()?;
+        let h = self.header_rows();
+        let window = rayon::current_num_threads().max(1) * 4;
+        for w in blocks.chunks(window) {
+            if self.progress.cancelled() {
+                return Err(Error::Cancelled);
+            }
+            // Row offsets of each block, taken under one read lock.
+            let offsets: Vec<Vec<u64>> = {
+                let ix = self.index();
+                w.iter()
+                    .map(|r| {
+                        let mut v: Vec<u64> = (r.start..r.end).map(|i| ix.start(i + h)).collect();
+                        v.push(ix.range(r.end - 1 + h).end);
+                        v
+                    })
+                    .collect()
+            };
+            let out: Vec<Result<T>> = w
+                .par_iter()
+                .zip(offsets.par_iter())
+                .map_init(Vec::new, |buf, (r, offs)| {
+                    let base = offs[0];
+                    let bytes = src.read(base..offs[offs.len() - 1], buf)?;
+                    Ok(map(&Block {
+                        first: r.start,
+                        base,
+                        offs,
+                        bytes,
+                    }))
+                })
+                .collect();
+            for (r, t) in w.iter().zip(out) {
+                consume(r.start, t?)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn tables(&self) -> &Tables {
         &self.tables
     }
@@ -507,4 +643,123 @@ impl Table {
     pub fn access(&self) -> Option<Access> {
         self.source.get().map(Source::access)
     }
+}
+
+fn save_columns(w: &mut crate::cache::Writer, cols: &Columns) {
+    use crate::time::Order;
+    w.u64(cols.cols.len() as u64);
+    w.u64(cols.primary_time.map_or(u64::MAX, |c| c as u64));
+    w.bitmap(&cols.ragged);
+    for c in &cols.cols {
+        let (k, o) = match c.kind {
+            columns::Kind::Text => (0, 0),
+            columns::Kind::Number => (1, 0),
+            columns::Kind::Time(o) => (
+                2,
+                match o {
+                    Order::Ymd => 0,
+                    Order::Mdy => 1,
+                    Order::Dmy => 2,
+                },
+            ),
+        };
+        w.u8(k);
+        w.u8(o);
+        match &c.dict {
+            Some(d) => {
+                w.u8(1);
+                w.u8(d.numeric as u8);
+                w.u64(d.values.len() as u64);
+                for (v, b) in d.values.iter().zip(&d.bitmaps) {
+                    w.bytes(v.as_bytes());
+                    w.bitmap(b);
+                }
+            }
+            None => w.u8(0),
+        }
+        match &c.time {
+            Some(t) => {
+                w.u8(1);
+                w.i64s(&t.ticks);
+                match &t.perm {
+                    Some(p) => {
+                        w.u8(1);
+                        w.u32s(p);
+                    }
+                    None => w.u8(0),
+                }
+            }
+            None => w.u8(0),
+        }
+    }
+}
+
+fn load_columns(
+    c: &mut crate::cache::Cursor<'_>,
+    ncols: usize,
+    index_rows: u64,
+) -> Result<Columns> {
+    use crate::time::Order;
+    let bad = || Error::Cache("columns section".into());
+    if c.u64()? as usize != ncols {
+        return Err(bad());
+    }
+    let pt = c.u64()?;
+    let primary_time = (pt != u64::MAX).then_some(pt as usize);
+    let ragged = c.bitmap()?;
+    let mut cols = Vec::with_capacity(ncols);
+    for _ in 0..ncols {
+        let k = c.u8()?;
+        let o = c.u8()?;
+        let order = match o {
+            0 => Order::Ymd,
+            1 => Order::Mdy,
+            2 => Order::Dmy,
+            _ => return Err(bad()),
+        };
+        let kind = match k {
+            0 => columns::Kind::Text,
+            1 => columns::Kind::Number,
+            2 => columns::Kind::Time(order),
+            _ => return Err(bad()),
+        };
+        let dict = if c.u8()? == 1 {
+            let numeric = c.u8()? == 1;
+            let n = c.u64()? as usize;
+            if n > columns::DICT_MAX + 1 {
+                return Err(bad());
+            }
+            let mut values = Vec::with_capacity(n);
+            let mut bitmaps = Vec::with_capacity(n);
+            for _ in 0..n {
+                values.push(String::from_utf8_lossy(c.bytes()?).into_owned());
+                bitmaps.push(c.bitmap()?);
+            }
+            Some(columns::Dict {
+                values,
+                bitmaps,
+                numeric,
+            })
+        } else {
+            None
+        };
+        let time = if c.u8()? == 1 {
+            let ticks = c.i64s()?;
+            let perm = if c.u8()? == 1 { Some(c.u32s()?) } else { None };
+            if ticks.len() as u64 > index_rows
+                || perm.as_ref().is_some_and(|p| p.len() != ticks.len())
+            {
+                return Err(bad());
+            }
+            Some(columns::TimeIndex { ticks, perm })
+        } else {
+            None
+        };
+        cols.push(columns::Column { kind, dict, time });
+    }
+    Ok(Columns {
+        cols,
+        ragged,
+        primary_time,
+    })
 }

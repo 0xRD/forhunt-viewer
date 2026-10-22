@@ -6,4 +6,7 @@ crlf: false
 columns (4): ["a", "a (2)", "Column 3", "b"]
 rows: 1
 structural_bad: []
+kinds: Number+dict(1), Number+dict(1), Number+dict(1), Number+dict(1)
+primary_time: None
+ragged: []
 row 0 (4 fields): "1", "2", "3", "4"

@@ -6,6 +6,9 @@ crlf: false
 columns (2): ["n", "sq"]
 rows: 5000
 structural_bad: []
+kinds: Number, Number
+primary_time: None
+ragged: []
 row 0 (2 fields): "0", "0"
 row 1 (2 fields): "1", "1"
 row 2 (2 fields): "2", "4"

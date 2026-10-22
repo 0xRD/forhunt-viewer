@@ -6,3 +6,6 @@ crlf: false
 columns (3): ["a", "b", "c"]
 rows: 0
 structural_bad: []
+kinds: Text, Text, Text
+primary_time: None
+ragged: []

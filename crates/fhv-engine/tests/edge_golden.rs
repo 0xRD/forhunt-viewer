@@ -26,6 +26,26 @@ fn summarise(t: &Table) -> String {
         t.structural_bad_rows().iter().collect::<Vec<_>>(),
     )
     .unwrap();
+    if let Some(ci) = t.column_index() {
+        let kinds: Vec<String> = ci
+            .cols
+            .iter()
+            .take(12)
+            .map(|c| {
+                let mut k = format!("{:?}", c.kind);
+                if let Some(d) = &c.dict {
+                    k.push_str(&format!("+dict({})", d.values.len()));
+                }
+                if c.time.is_some() {
+                    k.push_str("+ticks");
+                }
+                k
+            })
+            .collect();
+        writeln!(s, "kinds: {}", kinds.join(", ")).unwrap();
+        writeln!(s, "primary_time: {:?}", ci.primary_time).unwrap();
+        writeln!(s, "ragged: {:?}", ci.ragged.iter().collect::<Vec<_>>()).unwrap();
+    }
     let n = t.row_count();
     let shown: Vec<u64> = if n <= 12 {
         (0..n).collect()

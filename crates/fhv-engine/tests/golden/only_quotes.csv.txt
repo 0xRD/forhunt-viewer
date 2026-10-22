@@ -6,5 +6,8 @@ crlf: false
 columns (2): ["a", "b"]
 rows: 2
 structural_bad: []
+kinds: Text+dict(2), Text+dict(2)
+primary_time: None
+ragged: []
 row 0 (2 fields): "", "\""
 row 1 (2 fields): "\"\"", "x"

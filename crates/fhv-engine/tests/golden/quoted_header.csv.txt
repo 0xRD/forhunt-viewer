@@ -6,4 +6,7 @@ crlf: false
 columns (2): ["Event, Id", "Time"]
 rows: 1
 structural_bad: []
+kinds: Number+dict(1), Time(Ymd)+dict(1)+ticks
+primary_time: Some(1)
+ragged: []
 row 0 (2 fields): "1", "2024-01-01"

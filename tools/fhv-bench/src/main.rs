@@ -85,8 +85,53 @@ fn main() -> Result<()> {
                 }
                 std::thread::sleep(Duration::from_micros(200));
             };
+            let mut t_rows = None;
+            while !worker.is_finished() {
+                if t_rows.is_none() && table.progress.phase() == fhv_engine::Phase::Columns {
+                    t_rows = Some(t0.elapsed());
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
             worker.join().expect("worker panicked")?;
             let t_all = t0.elapsed();
+            let t_rows = t_rows.unwrap_or(t_all);
+            let cols = table.column_index();
+            let col_bytes: usize = cols.as_ref().map_or(0, |c| {
+                c.cols
+                    .iter()
+                    .map(|c| {
+                        c.dict.as_ref().map_or(0, |d| {
+                            d.bitmaps.iter().map(|b| b.serialized_size()).sum::<usize>()
+                        }) + c.time.as_ref().map_or(0, |t| {
+                            t.ticks.len() * 8 + t.perm.as_ref().map_or(0, |p| p.len() * 4)
+                        })
+                    })
+                    .sum()
+            });
+            let summary = cols.as_ref().map_or(String::new(), |c| {
+                c.cols
+                    .iter()
+                    .zip(&table.columns)
+                    .filter(|(c, _)| c.dict.is_some() || c.time.is_some())
+                    .map(|(c, n)| {
+                        format!(
+                            "{n}:{}{}",
+                            c.dict
+                                .as_ref()
+                                .map_or(String::new(), |d| format!("dict{}", d.values.len())),
+                            if c.time.is_some() { "+time" } else { "" }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            });
+            println!(
+                "rows_ready_s={:.3} columns_s={:.3} column_index_mib={:.1} ragged={} indexed=[{summary}]",
+                t_rows.as_secs_f64(),
+                (t_all - t_rows).as_secs_f64(),
+                col_bytes as f64 / (1 << 20) as f64,
+                cols.as_ref().map_or(0, |c| c.ragged.len()),
+            );
             let ix_bytes = table.index().heap_bytes();
             let mb = table.file_len as f64 / 1e6;
             println!(

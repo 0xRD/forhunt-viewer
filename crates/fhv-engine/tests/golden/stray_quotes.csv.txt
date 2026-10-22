@@ -6,6 +6,9 @@ crlf: false
 columns (3): ["a", "b", "c"]
 rows: 3
 structural_bad: []
+kinds: Number+dict(3), Text+dict(3), Number+dict(3)
+primary_time: None
+ragged: []
 row 0 (3 fields): "1", "he said \"hi\"", "3"
 row 1 (3 fields): "4", "5\" tall", "6"
 row 2 (3 fields): "7", "8", "9"
