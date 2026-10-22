@@ -1,0 +1,9 @@
+# quoted_header.csv: quoted header names with delimiters
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (2): ["Event, Id", "Time"]
+rows: 1
+structural_bad: []
+row 0 (2 fields): "1", "2024-01-01"

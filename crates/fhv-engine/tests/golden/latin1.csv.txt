@@ -1,0 +1,10 @@
+# latin1.csv: Windows-1252 text without BOM
+encoding: Windows-1252
+delimiter: ','
+header: true
+crlf: false
+columns (2): ["name", "city"]
+rows: 2
+structural_bad: []
+row 0 (2 fields): "José", "Montréal"
+row 1 (2 fields): "Müller", "Köln"

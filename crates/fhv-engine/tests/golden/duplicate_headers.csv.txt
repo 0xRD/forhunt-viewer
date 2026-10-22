@@ -1,0 +1,9 @@
+# duplicate_headers.csv: duplicate and empty header names
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (4): ["a", "a (2)", "Column 3", "b"]
+rows: 1
+structural_bad: []
+row 0 (4 fields): "1", "2", "3", "4"

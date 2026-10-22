@@ -1,0 +1,14 @@
+# times_mixed.csv: time formats in one column
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (2): ["t", "v"]
+rows: 6
+structural_bad: []
+row 0 (2 fields): "2024-03-11T10:00:00Z", "1"
+row 1 (2 fields): "2024-03-11 10:00:01.1234567", "2"
+row 2 (2 fields): "2024-03-11T12:00:02+02:00", "3"
+row 3 (2 fields): "03/11/2024 10:00:03", "4"
+row 4 (2 fields): "", "5"
+row 5 (2 fields): "not a date", "6"

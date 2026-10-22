@@ -1,0 +1,11 @@
+# invalid_utf8.csv: invalid UTF-8 sequences
+encoding: Windows-1252
+delimiter: ','
+header: true
+crlf: false
+columns (2): ["a", "b"]
+rows: 3
+structural_bad: []
+row 0 (2 fields): "1", "café"
+row 1 (2 fields): "2", "ÿþý"
+row 2 (2 fields): "3", "ok"

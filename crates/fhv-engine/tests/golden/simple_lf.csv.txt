@@ -1,0 +1,11 @@
+# simple_lf.csv: baseline, LF, escaped quotes
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (4): ["Time", "EventId", "User", "Message"]
+rows: 3
+structural_bad: []
+row 0 (4 fields): "2024-03-11 10:00:00.0000000", "4624", "jdoe", "Logon"
+row 1 (4 fields): "2024-03-11 10:00:01.0000000", "4625", "asmith", "Failed logon"
+row 2 (4 fields): "2024-03-11 10:00:02.0000000", "4688", "jdoe", "cmd.exe /c \"whoami\""

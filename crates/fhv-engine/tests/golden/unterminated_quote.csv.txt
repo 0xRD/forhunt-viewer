@@ -1,0 +1,10 @@
+# unterminated_quote.csv: a quote opened and never closed (runs to EOF)
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (2): ["a", "b"]
+rows: 2
+structural_bad: [1]
+row 0 (2 fields): "1", "2"
+row 1 (2 fields): "3", "never closed\n4,5\n6,7"

@@ -1,0 +1,14 @@
+# many_rows.csv: 5000 rows (spans several index blocks)
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (2): ["n", "sq"]
+rows: 5000
+structural_bad: []
+row 0 (2 fields): "0", "0"
+row 1 (2 fields): "1", "1"
+row 2 (2 fields): "2", "4"
+row 2500 (2 fields): "2500", "6250000"
+row 4998 (2 fields): "4998", "24980004"
+row 4999 (2 fields): "4999", "24990001"

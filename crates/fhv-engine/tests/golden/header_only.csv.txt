@@ -1,0 +1,8 @@
+# header_only.csv: header, no rows, no final newline
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (3): ["a", "b", "c"]
+rows: 0
+structural_bad: []

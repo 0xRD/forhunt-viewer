@@ -1,0 +1,8 @@
+# empty.csv: zero bytes
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (1): ["Column 1"]
+rows: 0
+structural_bad: []

@@ -1,0 +1,10 @@
+# utf16le.csv: UTF-16LE with BOM, non-ASCII
+encoding: UTF-16LE
+delimiter: ','
+header: true
+crlf: false
+columns (2): ["Name", "City"]
+rows: 2
+structural_bad: []
+row 0 (2 fields): "José", "São Paulo"
+row 1 (2 fields): "李", "北京"

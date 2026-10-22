@@ -1,0 +1,10 @@
+# blank_lines.csv: blank lines between rows and at the end
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (2): ["a", "b"]
+rows: 2
+structural_bad: []
+row 0 (2 fields): "1", "2"
+row 1 (2 fields): "3", "4"

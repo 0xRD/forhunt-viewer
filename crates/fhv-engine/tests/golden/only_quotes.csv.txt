@@ -1,0 +1,10 @@
+# only_quotes.csv: cells that are just quotes
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (2): ["a", "b"]
+rows: 2
+structural_bad: []
+row 0 (2 fields): "", "\""
+row 1 (2 fields): "\"\"", "x"

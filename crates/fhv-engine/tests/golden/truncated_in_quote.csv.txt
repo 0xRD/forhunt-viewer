@@ -1,0 +1,10 @@
+# truncated_in_quote.csv: file ends inside a quoted field
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (2): ["a", "b"]
+rows: 2
+structural_bad: [1]
+row 0 (2 fields): "1", "2"
+row 1 (2 fields): "3", "cut her"

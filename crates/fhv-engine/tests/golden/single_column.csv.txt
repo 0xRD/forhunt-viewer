@@ -1,0 +1,11 @@
+# single_column.csv: one column, no delimiter anywhere
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (1): ["value"]
+rows: 3
+structural_bad: []
+row 0 (1 fields): "alpha"
+row 1 (1 fields): "beta"
+row 2 (1 fields): "gamma"

@@ -1,0 +1,13 @@
+# ragged.csv: rows with too few and too many fields
+encoding: UTF-8
+delimiter: ','
+header: true
+crlf: false
+columns (3): ["a", "b", "c"]
+rows: 5
+structural_bad: []
+row 0 (3 fields): "1", "2", "3"
+row 1 (2 fields): "4", "5"
+row 2 (4 fields): "6", "7", "8", "9"
+row 3 (3 fields): "10", "11", "12"
+row 4 (3 fields): "13", "14", "15"
