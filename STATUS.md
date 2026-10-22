@@ -29,7 +29,8 @@ Last update: 2026-10-22 (session 1)
   -22.75 %)
 
 ## In progress
-- v0.1.0: CI dispatch (Linux), then release workflow
+- v0.1.0: blocked on GitHub Actions billing (B-005). Code is release-ready
+  at f247151 (local gate green); next: dispatch CI, then Release `tag=v0.1.0`
 
 ## Not verifiable here
 - macOS / Windows packaging and the macOS Open With delegate run only in
