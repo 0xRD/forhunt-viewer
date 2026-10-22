@@ -344,7 +344,7 @@ impl Table {
             c.u64()?,
             c.bitmap()?,
         )?;
-        if ix.len() > 0 && ix.range(ix.len() - 1).end > self.source()?.len {
+        if !ix.is_empty() && ix.range(ix.len() - 1).end > self.source()?.len {
             return Err(Error::Cache("offsets past end of file".into()));
         }
         self.progress
