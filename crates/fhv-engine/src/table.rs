@@ -276,6 +276,9 @@ impl Table {
             let mut h = blake3::Hasher::new();
             h.update(file_key(path)?.as_bytes());
             h.update(format!("{:?}{:?}{:?}", opts.dialect, opts.encoding, encoding).as_bytes());
+            // Parsing semantics are part of the key: a change invalidates
+            // every cached index.
+            h.update(&crate::scan::PARSER_VERSION.to_le_bytes());
             h.finalize().to_hex()[..32].to_string()
         };
         let table = Table {
@@ -430,7 +433,11 @@ impl Table {
             return Ok(out);
         }
         self.progress.set_phase(Phase::Transcoding, self.file_len);
-        let tmp_path = out.with_extension("partial");
+        // Unique per writer: two builds of the same file never share it.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let tmp_path = out.with_extension(format!("{}-{nonce}.partial", std::process::id()));
         let mut w = BufWriter::with_capacity(4 << 20, File::create(&tmp_path)?);
         let src = Source::open(&self.path, Access::Pread, 0)?;
         let (_, bom) = dialect::detect_encoding(src.read(0..4, &mut Vec::new())?);
@@ -517,6 +524,12 @@ impl Table {
 
     /// Raw bytes of data row `row` (no line terminator).
     pub fn raw_row<'a>(&'a self, row: u64, buf: &'a mut Vec<u8>) -> Result<&'a [u8]> {
+        if row >= self.row_count() {
+            return Err(Error::Other(format!(
+                "row {} is past the end of the file",
+                row + 1
+            )));
+        }
         let range = self.index().range(row + self.header_rows());
         Ok(trim_eol(self.source()?.read(range, buf)?))
     }
@@ -646,10 +659,7 @@ impl Table {
         map: impl Fn(&Block<'_>) -> T + Sync,
         consume: impl FnMut(u64, T) -> Result<()>,
     ) -> Result<()> {
-        let blocks: Vec<Range<u64>> = (rows.start..rows.end)
-            .step_by(block_rows.max(1) as usize)
-            .map(|s| s..(s + block_rows).min(rows.end))
-            .collect();
+        let blocks = self.split_blocks(rows, block_rows, |_| true);
         self.par_block_list(&blocks, map, consume)
     }
 
@@ -657,11 +667,50 @@ impl Table {
     /// at least one row of `set` (other blocks are not read).
     pub fn par_blocks_of(&self, set: &roaring::RoaringBitmap, block_rows: u64) -> Vec<Range<u64>> {
         let n = self.row_count();
-        (0..n)
-            .step_by(block_rows.max(1) as usize)
-            .map(|s| s..(s + block_rows).min(n))
-            .filter(|r| set.range_cardinality(r.start as u32..r.end as u32) > 0)
-            .collect()
+        self.split_blocks(0..n, block_rows, |r| {
+            set.range_cardinality(r.start as u32..r.end as u32) > 0
+        })
+    }
+
+    /// Cuts `rows` into blocks of at most `block_rows` rows and at most
+    /// `BLOCK_BYTES` bytes (a single larger row is a block on its own), so
+    /// a parallel pass holds a bounded amount of file data whatever the row
+    /// width. Blocks failing `keep` are dropped.
+    fn split_blocks(
+        &self,
+        rows: Range<u64>,
+        block_rows: u64,
+        keep: impl Fn(&Range<u64>) -> bool,
+    ) -> Vec<Range<u64>> {
+        const BLOCK_BYTES: u64 = 8 << 20;
+        let ix = self.index();
+        let h = self.header_rows();
+        let block_rows = block_rows.max(1);
+        let mut out = Vec::new();
+        let mut s = rows.start;
+        while s < rows.end {
+            let mut e = (s + block_rows).min(rows.end);
+            let base = ix.start(s + h);
+            if ix.range(e - 1 + h).end - base > BLOCK_BYTES {
+                // Too wide: largest e with bytes <= budget (at least one row).
+                let (mut lo, mut hi) = (s + 1, e);
+                while lo < hi {
+                    let mid = (lo + hi).div_ceil(2);
+                    if ix.range(mid - 1 + h).end - base <= BLOCK_BYTES {
+                        lo = mid;
+                    } else {
+                        hi = mid - 1;
+                    }
+                }
+                e = lo;
+            }
+            let r = s..e;
+            if keep(&r) {
+                out.push(r);
+            }
+            s = e;
+        }
+        out
     }
 
     /// Runs `map` over the given row ranges (in order, non-empty).
@@ -725,6 +774,7 @@ fn save_columns(w: &mut crate::cache::Writer, cols: &Columns) {
     w.u64(cols.cols.len() as u64);
     w.u64(cols.primary_time.map_or(u64::MAX, |c| c as u64));
     w.bitmap(&cols.ragged);
+    w.bitmap(&cols.odd_quotes);
     for c in &cols.cols {
         let (k, o) = match c.kind {
             columns::Kind::Text => (0, 0),
@@ -782,6 +832,7 @@ fn load_columns(
     let pt = c.u64()?;
     let primary_time = (pt != u64::MAX).then_some(pt as usize);
     let ragged = c.bitmap()?;
+    let odd_quotes = c.bitmap()?;
     let mut cols = Vec::with_capacity(ncols);
     for _ in 0..ncols {
         let k = c.u8()?;
@@ -835,6 +886,7 @@ fn load_columns(
     Ok(Columns {
         cols,
         ragged,
+        odd_quotes,
         primary_time,
     })
 }

@@ -84,6 +84,10 @@ pub struct Columns {
     pub cols: Vec<Column>,
     /// Rows whose field count differs from the header.
     pub ragged: RoaringBitmap,
+    /// Rows with text after a closing quote (`"ab"c`): their decoded cells
+    /// are not substrings of the raw bytes, so prefiltered scans test them
+    /// explicitly.
+    pub odd_quotes: RoaringBitmap,
     /// Index of the primary time column, if any.
     pub primary_time: Option<usize>,
 }
@@ -252,6 +256,7 @@ type LocalCodes = (Vec<Vec<u8>>, Vec<u16>);
 /// Per-block results of the full pass.
 struct BlockOut {
     ragged: Vec<u32>,
+    odd: Vec<u32>,
     /// Per dictionary column: local values and their row bitmaps.
     dicts: Vec<Option<ValueBitmaps>>,
     ticks: Vec<i64>,
@@ -308,6 +313,7 @@ pub fn build(table: &Table) -> Result<Columns> {
     let mut gvalues: Vec<Vec<Vec<u8>>> = vec![Vec::new(); ncols];
     let mut gbitmaps: Vec<Vec<RoaringBitmap>> = vec![Vec::new(); ncols];
     let mut ragged = RoaringBitmap::new();
+    let mut odd_quotes = RoaringBitmap::new();
     let mut ticks: Vec<i64> = Vec::with_capacity(if primary_time.is_some() {
         n as usize
     } else {
@@ -323,6 +329,7 @@ pub fn build(table: &Table) -> Result<Columns> {
         |b| {
             let mut out = BlockOut {
                 ragged: Vec::new(),
+                odd: Vec::new(),
                 dicts: Vec::new(),
                 ticks: Vec::with_capacity(if primary_time.is_some() { b.len() } else { 0 }),
             };
@@ -339,9 +346,12 @@ pub fn build(table: &Table) -> Result<Columns> {
             let mut spans: Vec<Span> = Vec::with_capacity(ncols);
             for k in 0..b.len() {
                 let row = b.row(k);
-                let nf = crate::scan::split_row(t, row, &mut spans);
+                let (nf, odd) = crate::scan::split_row_odd(t, row, &mut spans);
                 if nf != ncols {
                     out.ragged.push((b.first + k as u64) as u32);
+                }
+                if odd {
+                    out.odd.push((b.first + k as u64) as u32);
                 }
                 for c in 0..ncols {
                     let Some((vals, codes)) = &mut local[c] else {
@@ -411,6 +421,9 @@ pub fn build(table: &Table) -> Result<Columns> {
             for r in out.ragged {
                 let _ = ragged.try_push(r);
             }
+            for r in out.odd {
+                let _ = odd_quotes.try_push(r);
+            }
             ticks.extend_from_slice(&out.ticks);
             for (c, d) in out.dicts.into_iter().enumerate() {
                 let Some(gmap) = &mut gmaps[c] else { continue };
@@ -466,6 +479,7 @@ pub fn build(table: &Table) -> Result<Columns> {
     Ok(Columns {
         cols,
         ragged,
+        odd_quotes,
         primary_time,
     })
 }

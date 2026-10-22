@@ -25,6 +25,8 @@ use std::path::PathBuf;
 use eframe::egui;
 
 fn main() -> eframe::Result {
+    #[cfg(target_os = "macos")]
+    macos::install_open_handler();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("forhunt-viewer {}", env!("CARGO_PKG_VERSION"));
@@ -69,7 +71,7 @@ fn main() -> eframe::Result {
             }
             None => {
                 #[cfg(target_os = "macos")]
-                macos::install(&cc.egui_ctx);
+                macos::set_context(&cc.egui_ctx);
                 Ok(Box::new(app::App::new(cc, files)))
             }
         }),

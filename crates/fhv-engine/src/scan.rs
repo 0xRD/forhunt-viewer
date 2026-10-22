@@ -17,6 +17,10 @@
 //! single table lookup per input byte. A sequential fix-up then picks, per
 //! chunk, the run that matches the exit state of the previous chunk.
 
+/// Bump when the parsing semantics change (row or field boundaries,
+/// unquoting): cached indexes built with another version are not reused.
+pub const PARSER_VERSION: u32 = 1;
+
 pub const S: u8 = 0;
 pub const U: u8 = 1;
 pub const Q: u8 = 2;
@@ -222,13 +226,22 @@ pub struct Span {
 /// transition once. Newlines inside a row can only be inside quotes, where
 /// they are data, so they count as other bytes.
 pub fn split_row(t: &Tables, row: &[u8], out: &mut Vec<Span>) -> usize {
+    split_row_odd(t, row, out).0
+}
+
+/// [`split_row`], also telling whether a field has text after its closing
+/// quote (`"ab"c`). Such a field decodes to text that is not contiguous in
+/// the raw bytes, so raw-byte prefilters must test these rows anyway.
+pub fn split_row_odd(t: &Tables, row: &[u8], out: &mut Vec<Span>) -> (usize, bool) {
+    let mut odd = false;
     out.clear();
     let mut start = 0usize;
     let mut quoted = false;
     let mut state = S;
     let mut fed = 0usize;
-    let mut special = |i: usize, state: &mut u8, fed: &mut usize| {
+    let mut special = |i: usize, state: &mut u8, fed: &mut usize, odd: &mut bool| {
         if i > *fed {
+            *odd |= *state == E;
             *state = step(*state, C_OTHER);
         }
         *fed = i + 1;
@@ -259,6 +272,7 @@ pub fn split_row(t: &Tables, row: &[u8], out: &mut Vec<Span>) -> usize {
                 base + (m.trailing_zeros() / 8) as usize,
                 &mut state,
                 &mut fed,
+                &mut odd,
             );
             m &= m - 1;
         }
@@ -266,15 +280,16 @@ pub fn split_row(t: &Tables, row: &[u8], out: &mut Vec<Span>) -> usize {
     }
     for (j, &b) in rest.iter().enumerate() {
         if b == t.delim || b == t.quote {
-            special(base + j, &mut state, &mut fed);
+            special(base + j, &mut state, &mut fed, &mut odd);
         }
     }
+    odd |= state == E && row.len() > fed;
     out.push(Span {
         start: start as u32,
         end: row.len() as u32,
         quoted,
     });
-    out.len()
+    (out.len(), odd)
 }
 
 /// Byte-at-a-time [`split_row`] (reference for tests).

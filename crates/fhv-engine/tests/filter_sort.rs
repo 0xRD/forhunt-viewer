@@ -79,10 +79,15 @@ fn make_rows(seed: u64, n: usize) -> Vec<Vec<String>> {
 fn csv(rows: &[Vec<String>]) -> Vec<u8> {
     let mut s = COLS.join(",");
     s.push('\n');
-    for r in rows {
+    for (i, r) in rows.iter().enumerate() {
         let cells: Vec<String> = r
             .iter()
             .map(|c| {
+                // Some cells written as `"ab"c` (text after the closing
+                // quote): decodes to `abc` (D-010), raw bytes differ.
+                if i % 7 == 3 && c.len() >= 3 && c.is_ascii() && !c.contains([',', '"', '\n']) {
+                    return format!("\"{}\"{}", &c[..2], &c[2..]);
+                }
                 if c.contains([',', '"', '\n']) {
                     format!("\"{}\"", c.replace('"', "\"\""))
                 } else {

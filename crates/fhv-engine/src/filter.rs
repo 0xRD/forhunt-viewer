@@ -582,6 +582,11 @@ impl Engine {
         let t = self.table.tables();
         let quote = self.table.dialect.quote;
         let pre = cp.prefilter();
+        let odd = self
+            .table
+            .column_index()
+            .map(|ci| ci.odd_quotes.clone())
+            .filter(|o| !o.is_empty());
         let mut out = RoaringBitmap::new();
         let n = self.table.row_count();
         self.table.par_blocks(
@@ -590,7 +595,7 @@ impl Engine {
             |b| {
                 let mut rows = Vec::new();
                 let mut tmp = Vec::new();
-                let mut test = |k: usize| {
+                let test = |k: usize| {
                     let row = b.row(k);
                     let cell = match nth_field(t, row, c) {
                         Some(s) => field_bytes(row, s, quote, &mut tmp),
@@ -602,14 +607,25 @@ impl Engine {
                 };
                 match &pre {
                     Some(re) => {
-                        let mut last = usize::MAX;
+                        // Candidate rows: prefilter hits plus rows whose
+                        // decoded cells are not raw substrings, in order.
+                        let r0 = b.first as u32;
+                        let mut cand: Vec<usize> = Vec::new();
                         for m in re.find_iter(b.bytes()) {
                             let k = b.row_at(m.start());
-                            if k != last && k < b.len() {
-                                test(k);
-                                last = k;
+                            if k < b.len() && cand.last() != Some(&k) {
+                                cand.push(k);
                             }
                         }
+                        if let Some(odd) = &odd {
+                            cand.extend(
+                                odd.range(r0..r0 + b.len() as u32)
+                                    .map(|r| (r - r0) as usize),
+                            );
+                            cand.sort_unstable();
+                            cand.dedup();
+                        }
+                        cand.into_iter().for_each(test);
                     }
                     None => (0..b.len()).for_each(test),
                 }
@@ -649,6 +665,11 @@ impl Engine {
         let quote = self.table.dialect.quote;
         let ncols = self.table.columns.len();
         let pre = cp.prefilter();
+        let odd = self
+            .table
+            .column_index()
+            .map(|ci| ci.odd_quotes.clone())
+            .filter(|o| !o.is_empty());
         let mut out = RoaringBitmap::new();
         let n = self.table.row_count();
         self.table.par_blocks(
@@ -658,7 +679,7 @@ impl Engine {
                 let mut rows = Vec::new();
                 let mut spans = Vec::new();
                 let mut tmp = Vec::new();
-                let mut test = |k: usize| {
+                let test = |k: usize| {
                     let row = b.row(k);
                     crate::scan::split_row(t, row, &mut spans);
                     // Missing fields of a short row are empty cells.
@@ -674,14 +695,25 @@ impl Engine {
                 };
                 match &pre {
                     Some(re) => {
-                        let mut last = usize::MAX;
+                        // Candidate rows: prefilter hits plus rows whose
+                        // decoded cells are not raw substrings, in order.
+                        let r0 = b.first as u32;
+                        let mut cand: Vec<usize> = Vec::new();
                         for m in re.find_iter(b.bytes()) {
                             let k = b.row_at(m.start());
-                            if k != last && k < b.len() {
-                                test(k);
-                                last = k;
+                            if k < b.len() && cand.last() != Some(&k) {
+                                cand.push(k);
                             }
                         }
+                        if let Some(odd) = &odd {
+                            cand.extend(
+                                odd.range(r0..r0 + b.len() as u32)
+                                    .map(|r| (r - r0) as usize),
+                            );
+                            cand.sort_unstable();
+                            cand.dedup();
+                        }
+                        cand.into_iter().for_each(test);
                     }
                     None => (0..b.len()).for_each(test),
                 }
