@@ -1,10 +1,15 @@
 name: CI
 
+# Manual only: GitHub Actions minutes are limited (owner request, D-017).
+# Fast checks run locally with scripts/check.sh before every push; CI is
+# dispatched at milestones and before releases.
 on:
-  push:
-    branches: [master, main]
-  pull_request:
   workflow_dispatch:
+    inputs:
+      all_os:
+        description: "Also test on macOS and Windows (costs 10x / 2x minutes)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,8 +20,7 @@ env:
 
 concurrency:
   group: ci-${{ github.ref }}
-  # Every master commit gets a full result; PR pushes cancel older runs.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   lint:
@@ -38,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(inputs.all_os && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

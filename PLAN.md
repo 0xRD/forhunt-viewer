@@ -154,7 +154,7 @@ the error shown in the UI.
 ## OS integration
 
 - **CLI.** `forhunt-viewer [FILE...]`; single instance optional (later).
-- **macOS.** Universal `.app` (lipo arm64 + x86_64). Info.plist
+- **macOS.** Apple Silicon (arm64) `.app` only (D-018). Info.plist
   `CFBundleDocumentTypes` (`public.comma-separated-values-text`,
   `public.tab-separated-values-text`, `LSHandlerRank=Alternate`). `.dmg` built
   with `hdiutil`. Unsigned (user decision): README documents right-click > Open.
@@ -184,7 +184,7 @@ the error shown in the UI.
   - Golden files for generated edge cases.
   - UI smoke tests with `egui_kittest`.
 - **Release on tag** (or a manual dispatch with a tag, see forhunt B-005):
-  - universal .dmg;
+  - arm64 .dmg (D-018);
   - .msi and .zip;
   - AppImage and .tar.gz;
   - a `.sha256` for each.
