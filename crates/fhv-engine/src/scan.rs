@@ -147,7 +147,7 @@ pub fn scan_chunk(t: &Tables, chunk: &[u8]) -> ChunkScan {
     let mut v = PACKED_START;
     // Index just past the last byte fed to the machine.
     let mut fed = 0usize;
-    let mut special = |i: usize, v: &mut u8, fed: &mut usize, out: &mut ChunkScan| {
+    let special = |i: usize, v: &mut u8, fed: &mut usize, out: &mut ChunkScan| {
         if i > *fed {
             *v = t.packed[(*v as usize) << 2 | C_OTHER as usize];
         }
