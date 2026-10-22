@@ -74,6 +74,8 @@ pub struct Rows {
     pub nfields: Vec<u32>,
     /// Data row of each position.
     ids: Vec<u32>,
+    /// Cells longer than this (bytes) are cut, for display (0 = no limit).
+    pub max_cell: usize,
     raw: Vec<u8>,
     spans: Vec<Span>,
     tmp: Vec<u8>,
@@ -149,6 +151,21 @@ impl<'a> Block<'a> {
         let abs = self.base + pos as u64;
         self.offs.partition_point(|&o| o <= abs) - 1
     }
+}
+
+/// Appends `v` to `cell`, cut at `max` bytes (on a char boundary, with an
+/// ellipsis) when `max` > 0.
+fn push_capped(cell: &mut String, v: &str, max: usize) {
+    if max == 0 || v.len() <= max {
+        cell.push_str(v);
+        return;
+    }
+    let mut end = max;
+    while !v.is_char_boundary(end) {
+        end -= 1;
+    }
+    cell.push_str(&v[..end]);
+    cell.push('…');
 }
 
 /// Lossy UTF-8 decoding of a field, unquoting when needed.
@@ -579,6 +596,7 @@ impl Table {
             cells,
             nfields,
             ids,
+            max_cell,
             ..
         } = out;
         let bytes = src.read(first..last, raw)?;
@@ -592,7 +610,11 @@ impl Table {
                 let cell = &mut cells[k * ncols + c];
                 cell.clear();
                 if let Some(s) = spans.get(c) {
-                    cell.push_str(&decode_field(row, s, self.dialect.quote, tmp));
+                    push_capped(
+                        cell,
+                        &decode_field(row, s, self.dialect.quote, tmp),
+                        *max_cell,
+                    );
                 }
             }
         }
@@ -623,6 +645,7 @@ impl Table {
             cells,
             nfields,
             ids,
+            max_cell,
             ..
         } = out;
         for (k, &r) in rows.iter().enumerate() {
@@ -641,7 +664,11 @@ impl Table {
                 let cell = &mut cells[k * ncols + c];
                 cell.clear();
                 if let Some(s) = spans.get(c) {
-                    cell.push_str(&decode_field(bytes, s, self.dialect.quote, tmp));
+                    push_capped(
+                        cell,
+                        &decode_field(bytes, s, self.dialect.quote, tmp),
+                        *max_cell,
+                    );
                 }
             }
         }

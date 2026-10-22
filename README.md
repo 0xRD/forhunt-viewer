@@ -21,6 +21,9 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   is cached, so reopening a 5 GB file takes under a second.
 - **Bounded memory.** The file is never loaded as rows. The grid reads only
   the visible rows; the index is 2-7 % of the file size.
+  - Sorting a long text column maps the file read-only while it resolves
+    ties. The OS reports those pages as resident memory, but they are page
+    cache and the OS can reclaim them; see D-013.
 - **Filters.**
   - Per-column filter row ("contains").
   - Condition editor: equals, not equals, contains, not contains,
@@ -48,7 +51,8 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   - Encodings: UTF-8 (with or without BOM), UTF-16LE/BE, Windows-1252.
   - Delimiters `,` `;` tab `|`, auto-detected.
 - **Display time zone.** Times are converted for display only; the data
-  stays as in the file.
+  stays as in the file. Date filters compare with the file's values (UTC
+  for forensic tools), not the converted display.
 - **Dark and light themes**, keyboard-friendly.
 - **forhunt integration.** When a `ForhuntId` column is present:
   - copy `forhunt show <id> -p <evidence>` from a row's context menu;
@@ -56,6 +60,12 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
     report.
 
 ![filter value list](docs/screenshots/filter.png)
+
+### Limits
+
+- Line endings: LF and CRLF. Files with old Mac line endings (CR only) are
+  read as one long row.
+- Up to 4 294 967 295 rows per file.
 
 ### Forensically sound
 
@@ -67,7 +77,14 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   - macOS: `~/Library/Caches/forhunt-viewer`;
   - Windows: `%LOCALAPPDATA%\forhunt-viewer`.
 - Converted UTF-16 / Windows-1252 files need disk space in the cache
-  directory up to the size of the original.
+  directory (UTF-16: up to the original size; Windows-1252 with many
+  accented letters: up to twice).
+- The cache stays under 20 GiB (oldest files are removed first), and
+  *View > Clear index cache* empties it.
+- A cached index is reused when the path, size, modification time and a
+  sample of the content (first, middle and last 64 KiB) match. A file
+  changed elsewhere in its middle, with size and mtime preserved, would
+  need a cache clear.
 
 ## Install
 
@@ -92,7 +109,7 @@ certificate yet):
 
 A Homebrew cask (`0xrd/homebrew-tap`) will follow.
 
-From source (Rust 1.95+):
+From source (Rust 1.97; the toolchain is pinned in `rust-toolchain.toml`):
 
 ```bash
 cargo install --git https://github.com/0xRD/forhunt-viewer fhv-app
@@ -179,7 +196,9 @@ view of 1 M rows takes 0.8 s. See DECISIONS.md D-013.
     prefilter.
   - **Tests.** Property-tested against naive implementations.
 - `crates/fhv-app` is the egui/eframe application with a custom virtual
-  grid. Its scroll position is a row index, so 100 M+ rows scroll smoothly.
+  grid. Its scroll position is a row index, so huge files scroll smoothly
+  (measured: 20 M real rows, and 1 B synthetic rows in the grid
+  benchmark).
 - `tools/csv-gen` generates synthetic, seeded test data: forhunt / EvtxECmd,
   MFTECmd, Hayabusa, plaso layouts, and an edge-case suite.
 

@@ -55,8 +55,8 @@ jobs:
       - name: Generator is deterministic and platform-independent
         shell: bash
         run: scripts/check-gen.sh
-      - name: Benchmarks compile
-        run: cargo bench --workspace --no-run --locked
+      - name: Benchmark tool builds
+        run: cargo build --release --locked -p fhv-bench
 
   deny:
     name: cargo deny

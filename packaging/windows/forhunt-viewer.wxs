@@ -27,6 +27,8 @@
           <File Id="LicenseMit" Source="$(var.BinDir)\LICENSE-MIT" />
           <File Id="LicenseApache" Source="$(var.BinDir)\LICENSE-APACHE" />
           <File Id="ThirdParty" Source="$(var.BinDir)\THIRD-PARTY.md" />
+          <File Id="OflInter" Source="$(var.BinDir)\OFL-Inter.txt" />
+          <File Id="OflMono" Source="$(var.BinDir)\OFL-JetBrainsMono.txt" />
 
           <!-- ProgID used by the Open With entries. -->
           <RegistryValue Root="HKLM" Key="Software\Classes\forhunt-viewer.table" Value="Table (forhunt-viewer)" Type="string" />

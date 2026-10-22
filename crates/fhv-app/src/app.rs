@@ -13,6 +13,9 @@ use crate::settings::{Settings, dirs};
 use crate::tab::{ColFilter, DC_FIRST, DC_NUM, DC_TAG, Tab};
 use crate::tz;
 
+/// Index caches and converted copies above this are evicted at start-up.
+const CACHE_MAX: u64 = 20 << 30;
+
 /// Operators offered in the column filter editor.
 const OPS: &[&str] = &[
     "equals",
@@ -23,6 +26,8 @@ const OPS: &[&str] = &[
     "ends with",
     "is blank",
     "is not blank",
+    "in list",
+    "not in list",
     "regex",
     ">",
     ">=",
@@ -78,15 +83,23 @@ pub fn op_text(op: &Op) -> String {
     }
 }
 
-/// Column filter editor state.
+/// Column filter editor state (bound to one file).
 struct FilterEdit {
+    path: PathBuf,
     col: usize,
     op: String,
     a: String,
     b: String,
+    /// Values of "in list" / "not in list", one per line.
+    list: String,
     value_search: String,
-    /// Value list selection (dictionary columns): checked values.
+    /// Dictionary values with counts in the view (None until available).
+    values: Option<Vec<(String, u64)>>,
+    /// Checked state per value.
     checked: Vec<bool>,
+    /// Indexes of values matching `value_search`, for `shown_for`.
+    shown: Vec<usize>,
+    shown_for: Option<String>,
     /// Where it was opened from (the window starts there).
     at: Option<egui::Pos2>,
 }
@@ -162,6 +175,11 @@ impl App {
                 ..Style::default()
             },
         };
+        // Keep the cache bounded (oldest files first).
+        let cache = app.cache_dir.clone();
+        let _ = std::thread::Builder::new()
+            .name("fhv-cache-evict".into())
+            .spawn(move || crate::settings::evict_cache(&cache, CACHE_MAX));
         for f in files {
             app.open(&f);
         }
@@ -332,6 +350,21 @@ impl App {
                     ui.close();
                     self.columns_dlg = true;
                 }
+                if ui
+                    .button("Clear index cache")
+                    .on_hover_text(format!(
+                        "{} in {} (indexes and converted UTF-16 / Windows-1252 copies; rebuilt when needed)",
+                        fmt_bytes(crate::settings::cache_size(&self.cache_dir)),
+                        self.cache_dir.display()
+                    ))
+                    .clicked()
+                {
+                    ui.close();
+                    let freed = crate::settings::evict_cache(&self.cache_dir, 0);
+                    if let Some(t) = self.tabs.get_mut(self.active) {
+                        t.status = Some(format!("cleared {} of cache", fmt_bytes(freed)));
+                    }
+                }
                 ui.menu_button(format!("Time zone: {}", self.tz.name), |ui| {
                     ui.label("Display only; the data is not changed.");
                     for z in tz::COMMON {
@@ -422,7 +455,7 @@ impl App {
             if r.changed() && t.search_filter {
                 t.requery();
             }
-            let hits = t.search_hits.as_ref().map(|h| (&*t.view.rows & &**h).len());
+            let hits = t.hits_in_view;
             if !t.search.is_empty() {
                 ui.label(match hits {
                     Some(h) => format!("{h} rows"),
@@ -456,7 +489,7 @@ impl App {
             {
                 t.requery();
             }
-            let nbad = if t.ready() { t.bad_rows().len() } else { 0 };
+            let nbad = if t.ready() { t.bad_rows().len() } else { 0 }; // cached
             if nbad > 0
                 && ui
                     .toggle_value(
@@ -584,7 +617,7 @@ impl App {
                     ui.spinner();
                     ui.label(what);
                 }
-                if t.job.is_some() && ui.small_button("cancel (Esc)").clicked() {
+                if (t.job.is_some() || t.loading()) && ui.small_button("cancel (Esc)").clicked() {
                     t.cancel_job();
                 }
                 ui.separator();
@@ -968,14 +1001,21 @@ impl App {
                         && let Ok(f) = t.table.row_fields(r as u64)
                     {
                         let id = f.get(c).cloned().unwrap_or_default();
-                        let ev = if evidence.is_empty() {
-                            "<evidence>".to_string()
+                        // The id comes from the file: only a well-formed
+                        // forhunt id goes into a shell command.
+                        if valid_forhunt_id(&id) {
+                            let ev = if evidence.is_empty() {
+                                "<evidence>".to_string()
+                            } else {
+                                evidence.clone()
+                            };
+                            ui.ctx()
+                                .copy_text(format!("forhunt show {id} -p {}", shell_quote(&ev)));
+                            t.status = Some("copied forhunt command".into());
                         } else {
-                            evidence.clone()
-                        };
-                        ui.ctx()
-                            .copy_text(format!("forhunt show {id} -p {}", shell_quote(&ev)));
-                        t.status = Some("copied forhunt command".into());
+                            t.status =
+                                Some(format!("not a forhunt id: {:?}", grid::display_text(&id)));
+                        }
                     }
                 }
             }
@@ -987,37 +1027,19 @@ impl App {
 
     pub(crate) fn open_filter_editor(&mut self, c: usize) {
         let Some(t) = self.tab() else { return };
-        let checked = t
-            .table
-            .column_index()
-            .and_then(|ci| ci.cols[c].dict.as_ref().map(|d| d.values.len()))
-            .map(|n| {
-                // Pre-check from an existing in / not-in condition.
-                let ci = t.table.column_index();
-                let d = ci.as_ref().and_then(|ci| ci.cols[c].dict.as_ref());
-                let cond = t.filters[c]
-                    .conds
-                    .iter()
-                    .find(|o| matches!(o, Op::In(_) | Op::NotIn(_)));
-                (0..n)
-                    .map(|i| {
-                        let v = d.map(|d| d.values[i].as_str()).unwrap_or("");
-                        match cond {
-                            Some(Op::In(vs)) => vs.iter().any(|x| x == v),
-                            Some(Op::NotIn(vs)) => !vs.iter().any(|x| x == v),
-                            _ => true,
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let path = t.path.clone();
         self.filter_edit = Some(FilterEdit {
+            path,
             col: c,
             op: "contains".into(),
             a: String::new(),
             b: String::new(),
+            list: String::new(),
             value_search: String::new(),
-            checked,
+            values: None,
+            checked: Vec::new(),
+            shown: Vec::new(),
+            shown_for: None,
             at: None,
         });
     }
@@ -1026,24 +1048,54 @@ impl App {
         let Some(fe) = &mut self.filter_edit else {
             return;
         };
-        let Some(t) = self.tabs.get_mut(self.active) else {
+        // The editor belongs to one file: close it when that tab is no
+        // longer the active one (closed, switched, another file opened).
+        let Some(t) = self.tabs.get_mut(self.active).filter(|t| t.path == fe.path) else {
             self.filter_edit = None;
             return;
         };
         let c = fe.col;
-        let mut open = true;
-        let mut changed = false;
+        if c >= t.table.columns.len() {
+            self.filter_edit = None;
+            return;
+        }
+        // Value list: built once the column index exists (it may not when
+        // the editor is opened during indexing), counts within the view.
+        if fe.values.is_none()
+            && t.ready()
+            && let Some(ci) = t.table.column_index()
+        {
+            if let Some(v) = value_counts(&ci, c, Some(&t.view.rows)) {
+                let cond = t.filters[c]
+                    .conds
+                    .iter()
+                    .find(|o| matches!(o, Op::In(_) | Op::NotIn(_)));
+                fe.checked = v
+                    .iter()
+                    .map(|(val, _)| match cond {
+                        Some(Op::In(vs)) => vs.iter().any(|x| x == val),
+                        Some(Op::NotIn(vs)) => !vs.iter().any(|x| x == val),
+                        _ => true,
+                    })
+                    .collect();
+                fe.values = Some(v);
+            } else {
+                fe.values = Some(Vec::new());
+            }
+        }
         if fe.at.is_none() {
             fe.at = ctx.pointer_latest_pos().or(Some(egui::pos2(200.0, 150.0)));
         }
+        let tz_note = (!self.tz.is_utc()).then(|| self.tz.name.clone());
+        let mut open = true;
+        let mut changed = false;
         egui::Window::new(format!("Filter: {}", t.table.columns[c]))
             .id(egui::Id::unique(("filter-edit", c)))
             .default_pos(fe.at.unwrap_or_default())
             .open(&mut open)
-            .default_width(380.0)
+            .default_width(400.0)
             .show(ctx, |ui| {
                 let f = &mut t.filters[c];
-                // Existing conditions.
                 if !f.conds.is_empty() {
                     let mut del = None;
                     for (i, op) in f.conds.iter().enumerate() {
@@ -1072,77 +1124,109 @@ impl App {
                                 ui.selectable_value(&mut fe.op, o.to_string(), *o);
                             }
                         });
-                    if !matches!(fe.op.as_str(), "is blank" | "is not blank") {
-                        ui.add(egui::TextEdit::singleline(&mut fe.a).desired_width(140.0));
+                    let list_op = matches!(fe.op.as_str(), "in list" | "not in list");
+                    if !list_op && !matches!(fe.op.as_str(), "is blank" | "is not blank") {
+                        ui.add(egui::TextEdit::singleline(&mut fe.a).desired_width(150.0));
                     }
                     if fe.op == "between" {
                         ui.label("and");
-                        ui.add(egui::TextEdit::singleline(&mut fe.b).desired_width(140.0));
+                        ui.add(egui::TextEdit::singleline(&mut fe.b).desired_width(150.0));
                     }
                     if ui.button("Add").clicked() {
-                        f.conds.push(make_op(&fe.op, &fe.a, &fe.b));
+                        let op = if list_op {
+                            let vals: Vec<String> = fe
+                                .list
+                                .lines()
+                                .map(|l| l.trim().to_string())
+                                .filter(|l| !l.is_empty())
+                                .collect();
+                            if fe.op == "in list" { Op::In(vals) } else { Op::NotIn(vals) }
+                        } else {
+                            make_op(&fe.op, &fe.a, &fe.b)
+                        };
+                        f.conds.push(op);
                         fe.a.clear();
                         fe.b.clear();
+                        fe.list.clear();
                         changed = true;
                     }
                 });
+                if matches!(fe.op.as_str(), "in list" | "not in list") {
+                    ui.label(RichText::new("One value per line (paste a list):").small());
+                    ui.add(egui::TextEdit::multiline(&mut fe.list).desired_rows(4).desired_width(f32::INFINITY));
+                }
                 changed |= ui.checkbox(&mut f.case_sensitive, "case sensitive").changed();
-                ui.label(
-                    RichText::new("Dates: 2024-03-11 10:00:00, ISO 8601 or the column's own format. Numbers compare numerically.")
-                        .weak()
-                        .small(),
+                let mut hint = String::from(
+                    "Dates: 2024-03-11 10:00:00, ISO 8601 or the column's own format. Numbers compare numerically.",
                 );
-                // Value list.
-                let ci = t.table.column_index();
-                if let Some(ci) = &ci
-                    && let Some(counts) = value_counts(ci, c, None)
-                {
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label(format!("Values ({})", counts.len()));
-                        ui.add(egui::TextEdit::singleline(&mut fe.value_search).hint_text("search values").desired_width(140.0));
-                    });
-                    let needle = fe.value_search.to_lowercase();
-                    ui.horizontal(|ui| {
-                        if ui.small_button("all").clicked() {
-                            for (i, (v, _)) in counts.iter().enumerate() {
-                                if v.to_lowercase().contains(&needle) {
+                if let Some(z) = &tz_note {
+                    hint.push_str(&format!(
+                        " Dates are compared with the values in the file (UTC), not the {z} times shown."
+                    ));
+                }
+                ui.label(RichText::new(hint).weak().small());
+                match &fe.values {
+                    Some(values) if !values.is_empty() => {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label(format!("Values ({}, counts in view)", values.len()));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut fe.value_search)
+                                    .hint_text("search values")
+                                    .desired_width(140.0),
+                            );
+                        });
+                        if fe.shown_for.as_deref() != Some(fe.value_search.as_str()) {
+                            let needle = fe.value_search.to_lowercase();
+                            fe.shown = (0..values.len())
+                                .filter(|&i| needle.is_empty() || values[i].0.to_lowercase().contains(&needle))
+                                .collect();
+                            fe.shown_for = Some(fe.value_search.clone());
+                        }
+                        ui.horizontal(|ui| {
+                            if ui.small_button("all").clicked() {
+                                for &i in &fe.shown {
                                     fe.checked[i] = true;
                                 }
                             }
-                        }
-                        if ui.small_button("none").clicked() {
-                            for (i, (v, _)) in counts.iter().enumerate() {
-                                if v.to_lowercase().contains(&needle) {
+                            if ui.small_button("none").clicked() {
+                                for &i in &fe.shown {
                                     fe.checked[i] = false;
                                 }
                             }
-                        }
-                    });
-                    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                        for (i, (v, n)) in counts.iter().enumerate() {
-                            if !needle.is_empty() && !v.to_lowercase().contains(&needle) {
-                                continue;
+                        });
+                        // Only the visible part of the list is laid out.
+                        let row_h = ui.spacing().interact_size.y;
+                        egui::ScrollArea::vertical().max_height(260.0).show_rows(ui, row_h, fe.shown.len(), |ui, range| {
+                            for &i in &fe.shown[range] {
+                                let (v, n) = &values[i];
+                                let label = if v.is_empty() {
+                                    "(blank)".to_string()
+                                } else {
+                                    grid::display_text(v).into_owned()
+                                };
+                                ui.checkbox(&mut fe.checked[i], format!("{label}   ({})", fmt_n(*n)));
                             }
-                            let label = if v.is_empty() { "(blank)".to_string() } else { grid::display_text(v).into_owned() };
-                            ui.checkbox(&mut fe.checked[i], format!("{label}   ({})", fmt_n(*n)));
+                        });
+                        if ui.button("Apply value selection").clicked() {
+                            f.conds.retain(|o| !matches!(o, Op::In(_) | Op::NotIn(_)));
+                            let on: Vec<String> =
+                                values.iter().zip(&fe.checked).filter(|(_, c)| **c).map(|(v, _)| v.0.clone()).collect();
+                            let off: Vec<String> =
+                                values.iter().zip(&fe.checked).filter(|(_, c)| !**c).map(|(v, _)| v.0.clone()).collect();
+                            if !off.is_empty() {
+                                // The shorter list selects the same rows.
+                                f.conds.push(if on.len() <= off.len() { Op::In(on) } else { Op::NotIn(off) });
+                            }
+                            changed = true;
                         }
-                    });
-                    if ui.button("Apply value selection").clicked() {
-                        f.conds.retain(|o| !matches!(o, Op::In(_) | Op::NotIn(_)));
-                        let on: Vec<String> = counts.iter().zip(&fe.checked).filter(|(_, c)| **c).map(|(v, _)| v.0.clone()).collect();
-                        let off: Vec<String> = counts.iter().zip(&fe.checked).filter(|(_, c)| !**c).map(|(v, _)| v.0.clone()).collect();
-                        if !off.is_empty() {
-                            // The shorter list, same rows.
-                            f.conds.push(if on.len() <= off.len() { Op::In(on) } else { Op::NotIn(off) });
-                            // Exact values: case sensitive match semantics
-                            // are handled by the engine's folding; values
-                            // differing only by case select each other.
-                        }
-                        changed = true;
                     }
-                } else if t.ready() {
-                    ui.label(RichText::new("No value list: too many distinct values.").weak().small());
+                    Some(_) => {
+                        ui.label(RichText::new("No value list: too many distinct values.").weak().small());
+                    }
+                    None => {
+                        ui.label(RichText::new("Value list available once indexing finishes.").weak().small());
+                    }
                 }
             });
         if changed {
@@ -1250,7 +1334,10 @@ impl App {
                     ui.radio_value(&mut dlg.jsonl, true, "JSONL");
                 });
                 ui.label(
-                    RichText::new("Visible columns, in display order. UTF-8, LF line ends.").weak(),
+                    RichText::new(
+                    "Visible columns, in display order. UTF-8, LF line ends; bytes that are not valid UTF-8 become U+FFFD.",
+                )
+                .weak(),
                 );
                 go = ui.button("Export…").clicked();
             });
@@ -1271,19 +1358,17 @@ impl App {
                 .add_filter(ext, &[ext])
                 .save_file()
             {
-                if p == t.path {
-                    self.error = Some("refusing to overwrite the input file".into());
+                if let Some(e) = refuse_target(&self.tabs, &p) {
+                    self.error = Some(e);
                     return;
                 }
-                let rows: Vec<u32> = if tagged {
-                    t.view.iter().filter(|r| t.tags.contains_key(r)).collect()
-                } else {
-                    t.view.iter().collect()
+                let Some(t) = self.tabs.get_mut(self.active) else {
+                    return;
                 };
                 let cols = t.order.clone();
                 t.start_export(
                     p,
-                    rows,
+                    tagged,
                     cols,
                     if jsonl { Format::Jsonl } else { Format::Csv },
                 );
@@ -1313,8 +1398,8 @@ impl App {
                     text.trim().replace(['_', ','], "").parse::<u64>(),
                     self.tabs.get_mut(self.active),
                 ) {
-                    let r = n.saturating_sub(1) as u32;
-                    match t.view.position_of(r) {
+                    let r = n.checked_sub(1).and_then(|r| u32::try_from(r).ok());
+                    match r.and_then(|r| t.view.position_of(r)) {
                         Some(p) => {
                             t.grid.selected = Some(p);
                             grid::scroll_to(&mut t.grid, p);
@@ -1415,9 +1500,13 @@ impl App {
             .add_filter("session", &["json"])
             .save_file()
         {
+            if let Some(e) = refuse_target(&self.tabs, &p) {
+                self.error = Some(e);
+                return;
+            }
             let r = serde_json::to_vec_pretty(&s)
                 .map_err(|e| e.to_string())
-                .and_then(|b| std::fs::write(&p, b).map_err(|e| e.to_string()));
+                .and_then(|b| crate::settings::write_atomic(&p, &b).map_err(|e| e.to_string()));
             if let Err(e) = r {
                 self.error = Some(format!("{}: {e}", p.display()));
             }
@@ -1471,9 +1560,12 @@ impl App {
         if let Some(p) = rfd::FileDialog::new()
             .set_file_name("forhunt-tagged-ids.txt")
             .save_file()
-            && let Err(e) = std::fs::write(&p, out)
         {
-            self.error = Some(format!("{}: {e}", p.display()));
+            if let Some(e) = refuse_target(&self.tabs, &p) {
+                self.error = Some(e);
+            } else if let Err(e) = crate::settings::write_atomic(&p, out.as_bytes()) {
+                self.error = Some(format!("{}: {e}", p.display()));
+            }
         }
     }
 }
@@ -1501,14 +1593,65 @@ fn forhunt_col(t: &Tab) -> Option<usize> {
         .position(|c| c.eq_ignore_ascii_case("ForhuntId"))
 }
 
+/// Single-quotes a value for POSIX shells and PowerShell (a single quote
+/// inside is closed, escaped and reopened: POSIX style).
 fn shell_quote(s: &str) -> String {
-    if s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || "/._-:\\".contains(c))
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-:\\".contains(c))
     {
         s.to_string()
     } else {
-        format!("\"{}\"", s.replace('"', "\\\""))
+        format!("'{}'", s.replace('\'', "'\\''"))
     }
+}
+
+/// `<8 hex>:<digits>`, as forhunt writes ids.
+fn valid_forhunt_id(id: &str) -> bool {
+    match id.split_once(':') {
+        Some((k, r)) => {
+            k.len() == 8
+                && k.bytes().all(|b| b.is_ascii_hexdigit())
+                && !r.is_empty()
+                && r.len() <= 20
+                && r.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => false,
+    }
+}
+
+/// Refuses writing to a file that is open as an input (also through a
+/// symlink, a relative path or a hard link): evidence is never modified.
+pub fn refuse_target(tabs: &[Tab], target: &Path) -> Option<String> {
+    let canon = |p: &Path| std::fs::canonicalize(p).ok();
+    let t = canon(target);
+    for tab in tabs {
+        let same = match (&t, canon(&tab.path)) {
+            (Some(a), Some(b)) => *a == b || same_inode(a, &b),
+            _ => target == tab.path,
+        };
+        if same {
+            return Some(format!(
+                "refusing to write to {}: it is an open input file",
+                target.display()
+            ));
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn same_inode(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_inode(_: &Path, _: &Path) -> bool {
+    false
 }
 
 fn row_tsv(t: &Tab, fields: &[String]) -> String {
@@ -1549,13 +1692,68 @@ fn copy_selected_row(ctx: &egui::Context, t: &mut Tab) {
     }
 }
 
+/// Re-indents a JSON object/array for reading without changing it: keys
+/// keep their order, duplicates stay, numbers keep their spelling (only
+/// whitespace outside strings changes). None if it is not valid JSON.
 fn pretty_json(v: &str) -> Option<String> {
-    let s = v.trim_start();
+    let s = v.trim();
     if !(s.starts_with('{') || s.starts_with('[')) || v.len() > 2_000_000 {
         return None;
     }
-    let j: serde_json::Value = serde_json::from_str(v).ok()?;
-    serde_json::to_string_pretty(&j).ok()
+    serde_json::from_str::<serde::de::IgnoredAny>(s).ok()?;
+    let mut out = String::with_capacity(s.len() * 2);
+    let mut depth = 0usize;
+    let (mut in_str, mut esc) = (false, false);
+    let nl = |out: &mut String, d: usize| {
+        out.push('\n');
+        out.extend(std::iter::repeat_n("  ", d));
+    };
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_str {
+            out.push(c);
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_str = true;
+                out.push(c);
+            }
+            '{' | '[' => {
+                out.push(c);
+                // Empty container stays on one line.
+                while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                    chars.next();
+                }
+                if matches!(chars.peek(), Some('}') | Some(']')) {
+                    out.push(chars.next().unwrap_or(' '));
+                } else {
+                    depth += 1;
+                    nl(&mut out, depth);
+                }
+            }
+            '}' | ']' => {
+                depth = depth.saturating_sub(1);
+                nl(&mut out, depth);
+                out.push(c);
+            }
+            ',' => {
+                out.push(c);
+                nl(&mut out, depth);
+            }
+            ':' => out.push_str(": "),
+            c if c.is_whitespace() => {}
+            c => out.push(c),
+        }
+    }
+    Some(out)
 }
 
 pub fn fmt_n(n: u64) -> String {
@@ -1694,4 +1892,17 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
+}
+
+#[cfg(test)]
+pub fn pretty_json_for_test(v: &str) -> Option<String> {
+    pretty_json(v)
+}
+#[cfg(test)]
+pub fn valid_forhunt_id_for_test(v: &str) -> bool {
+    valid_forhunt_id(v)
+}
+#[cfg(test)]
+pub fn shell_quote_for_test(v: &str) -> String {
+    shell_quote(v)
 }

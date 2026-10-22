@@ -42,12 +42,23 @@ fn main() -> eframe::Result {
     // Hidden: the phase 1 grid benchmark (docs/PERF.md).
     let spike = flag(&args, "--spike-rows");
     let bench = flag(&args, "--bench-frames").map(|n| n as usize);
-    let files: Vec<PathBuf> = args
-        .iter()
-        .enumerate()
-        .filter(|(i, a)| !a.starts_with("--") && !(*i > 0 && args[i - 1].starts_with("--")))
-        .map(|(_, a)| PathBuf::from(a))
-        .collect();
+    // Files: every argument that is not an option or an option's value;
+    // everything after `--`. macOS may add `-psn_...` (process serial).
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--" => {
+                files.extend(it.by_ref().map(PathBuf::from));
+                break;
+            }
+            "--spike-rows" | "--bench-frames" => {
+                it.next();
+            }
+            a if a.starts_with("-psn_") || a.starts_with("--") => {}
+            a => files.push(PathBuf::from(a)),
+        }
+    }
     let mut opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("forhunt-viewer")

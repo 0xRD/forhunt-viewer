@@ -99,6 +99,9 @@ pub struct Tab {
     last_query: Option<Query>,
     /// Text the app should put on the clipboard (from a background job).
     pub clipboard: Option<String>,
+    bad: Option<Arc<RoaringBitmap>>,
+    /// Search hits within the current view (recomputed when either changes).
+    pub hits_in_view: Option<u64>,
     /// Texts of the # column for the prepared rows.
     nums: Vec<String>,
     nums_first: u64,
@@ -168,13 +171,20 @@ impl Tab {
             order: (0..ncols).collect(),
             widths,
             grid: GridState::default(),
-            rows: Rows::default(),
+            // The grid shows at most a few hundred characters of a cell.
+            rows: {
+                let mut r = Rows::default();
+                r.max_cell = 4096;
+                r
+            },
             rows_key: None,
             tz_name: "UTC".into(),
             last_query: None,
             nums: Vec::new(),
             nums_first: 0,
             clipboard: None,
+            bad: None,
+            hits_in_view: None,
         })
     }
 
@@ -194,10 +204,18 @@ impl Tab {
         self.loader.is_none() && self.load_error.is_none()
     }
 
-    pub fn bad_rows(&self) -> RoaringBitmap {
+    /// Structural and ragged bad rows (computed once the index is done).
+    pub fn bad_rows(&mut self) -> Arc<RoaringBitmap> {
+        if let Some(b) = &self.bad {
+            return b.clone();
+        }
         let mut b = self.table.structural_bad_rows();
         if let Some(ci) = self.table.column_index() {
             b |= &ci.ragged;
+        }
+        let b = Arc::new(b);
+        if self.ready() {
+            self.bad = Some(b.clone());
         }
         b
     }
@@ -235,8 +253,10 @@ impl Tab {
         if self.tagged_only {
             all.push(Expr::Rows(Arc::new(self.tag_set())));
         }
-        if self.bad_only {
-            all.push(Expr::Rows(Arc::new(self.bad_rows())));
+        if self.bad_only
+            && let Some(b) = &self.bad
+        {
+            all.push(Expr::Rows(b.clone()));
         }
         (!all.is_empty()).then_some(Expr::And(all))
     }
@@ -275,26 +295,39 @@ impl Tab {
         });
     }
 
+    /// Cancels the running job, or the indexing while the file loads.
     pub fn cancel_job(&mut self) {
-        if self.job.is_some() {
+        if self.job.is_some() || self.loader.is_some() {
             self.table.progress.cancel();
         }
     }
 
+    /// Exports the view (or its tagged rows) in display order, in the
+    /// background (row selection included).
     pub fn start_export(
         &mut self,
         path: PathBuf,
-        rows: Vec<u32>,
+        tagged: bool,
         cols: Vec<usize>,
         fmt: fhv_engine::export::Format,
     ) {
-        if self.job.is_some() {
+        if self.job.is_some() || !self.ready() {
             self.status = Some("busy: wait for the current operation".into());
             return;
         }
         let t = self.table.clone();
         let p = path.clone();
+        let view = self.view.clone();
+        let tags = Arc::new(self.tag_set());
         self.spawn(JobKind::Export(path), None, move || {
+            let rows: Vec<u32> = if tagged {
+                match &view.order {
+                    Some(o) => o.iter().copied().filter(|r| tags.contains(*r)).collect(),
+                    None => (&*view.rows & &*tags).iter().collect(),
+                }
+            } else {
+                view.iter().collect()
+            };
             let f = std::fs::File::create(&p).map_err(|e| format!("{}: {e}", p.display()))?;
             let mut w = std::io::BufWriter::with_capacity(4 << 20, f);
             let n = fhv_engine::export::export(&t, &rows, &cols, fmt, &mut w)
@@ -306,7 +339,7 @@ impl Tab {
     /// Copies the values of file column `c` in the view (first 1 M rows),
     /// one per line, in the background.
     pub fn start_copy_column(&mut self, c: usize) {
-        if self.job.is_some() {
+        if self.job.is_some() || !self.ready() {
             self.status = Some("busy: wait for the current operation".into());
             return;
         }
@@ -359,7 +392,11 @@ impl Tab {
                 Ok(r) => {
                     self.loader = None;
                     match r {
-                        Ok(()) => self.pending = true,
+                        Ok(()) => {
+                            self.pending = true;
+                            let n = self.table.row_count();
+                            self.tags.retain(|r, _| (*r as u64) < n);
+                        }
                         Err(e) => self.load_error = Some(e),
                     }
                 }
@@ -388,6 +425,7 @@ impl Tab {
                         Ok(JobResult::View(v)) => {
                             let sel_row = self.grid.selected.and_then(|p| self.view.row_at(p));
                             self.view = v;
+                            self.update_hits();
                             self.view_gen += 1;
                             self.last_ms = ms;
                             self.last_query = job.and_then(|j| j.query);
@@ -401,6 +439,7 @@ impl Tab {
                         }
                         Ok(JobResult::Hits(b)) => {
                             self.search_hits = Some(Arc::new(b));
+                            self.update_hits();
                             self.status = None;
                         }
                         Ok(JobResult::Text(text, n)) => {
@@ -416,7 +455,9 @@ impl Tab {
                         // Superseded by newer input: nothing to report.
                         Err(e) if e == "cancelled" => {
                             if !self.pending && self.hits_for == self.search {
-                                self.status = Some("cancelled".into());
+                                self.status = Some(
+                                    "cancelled: the rows shown are those of the previous filter / sort".into(),
+                                );
                             }
                         }
                         Err(e) => self.status = Some(format!("error: {e}")),
@@ -462,9 +503,17 @@ impl Tab {
             } else if self.search.is_empty() && self.search_hits.is_some() {
                 self.search_hits = None;
                 self.hits_for.clear();
+                self.update_hits();
             }
         }
         self.job.is_some() || self.loader.is_some()
+    }
+
+    fn update_hits(&mut self) {
+        self.hits_in_view = self
+            .search_hits
+            .as_ref()
+            .map(|h| self.view.rows.intersection_len(h));
     }
 
     /// Progress text of the running work.
@@ -567,17 +616,24 @@ impl Tab {
                 self.view.position_of(r)
             }
             Some(order) => {
-                let start = cur.map_or(if forward { 0 } else { n - 1 }, |p| p);
-                let len = order.len() as u64;
-                (1..=len)
-                    .map(|d| {
-                        if forward {
-                            (start + d) % len
-                        } else {
-                            (start + len - d % len) % len
-                        }
+                use rayon::prelude::*;
+                let len = order.len();
+                let start = cur.map_or(if forward { len } else { 0 }, |p| p as usize);
+                let hit = |p: &usize| hits.contains(order[*p]);
+                let found = if forward {
+                    let after = (start.saturating_add(1).min(len)..len)
+                        .into_par_iter()
+                        .find_first(hit);
+                    after.or_else(|| (0..start.min(len)).into_par_iter().find_first(hit))
+                } else {
+                    let before = (0..start.min(len)).into_par_iter().find_last(hit);
+                    before.or_else(|| {
+                        (start.saturating_add(1).min(len)..len)
+                            .into_par_iter()
+                            .find_last(hit)
                     })
-                    .find(|&p| hits.contains(order[p as usize]))
+                };
+                found.map(|p| p as u64)
             }
         }
     }

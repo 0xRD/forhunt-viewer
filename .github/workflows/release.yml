@@ -68,6 +68,8 @@ jobs:
         run: |
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
+          # Unpinned build tool (D-025): record exactly what was used.
+          sha256sum appimagetool
           scripts/package-linux.sh "$VER" "$PWD/appimagetool"
 
       - name: Build + package (macOS)
@@ -94,9 +96,13 @@ jobs:
           $name = "forhunt-viewer-$env:VER-windows-x86_64"
           New-Item -ItemType Directory -Force -Path "stage\$name", dist | Out-Null
           Copy-Item target\release\forhunt-viewer.exe, LICENSE-MIT, LICENSE-APACHE, README.md, THIRD-PARTY.md, packaging\icons\icon.ico "stage\$name\"
+          Copy-Item crates\fhv-app\assets\fonts\OFL-*.txt "stage\$name\"
           Compress-Archive -Path "stage\$name" -DestinationPath "dist\$name.zip"
           dotnet tool install --global wix --version 5.0.2
-          wix build -arch x64 -d "Version=$env:MSI_VER" -d "BinDir=stage\$name" packaging\windows\forhunt-viewer.wxs -o "dist\$name.msi"
+          $wix = Join-Path $env:USERPROFILE ".dotnet\tools\wix.exe"
+          $bin = (Resolve-Path "stage\$name").Path
+          & $wix build -arch x64 -d "Version=$env:MSI_VER" -d "BinDir=$bin" packaging\windows\forhunt-viewer.wxs -o "dist\$name.msi"
+          if ($LASTEXITCODE -ne 0) { throw "wix build failed" }
           Get-ChildItem dist -File | Where-Object { $_.Name -notlike "*.sha256" -and $_.Name -notlike "*.wixpdb" } | ForEach-Object {
             $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             Set-Content -NoNewline -Path "$($_.FullName).sha256" -Value "$h  $($_.Name)`n"

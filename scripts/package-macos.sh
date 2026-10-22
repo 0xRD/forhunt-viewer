@@ -9,9 +9,11 @@ mkdir -p dist stage
 APP=stage/dmg/forhunt-viewer.app
 rm -rf stage/dmg && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/"
-sed "s/@VERSION@/$VER/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
+# Bundle versions must be numeric (x.y.z): drop a pre-release suffix.
+BUNDLE_VER="${VER%%-*}"
+sed "s/@VERSION@/$BUNDLE_VER/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
 cp packaging/icons/icon.icns "$APP/Contents/Resources/"
-cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md "$APP/Contents/Resources/"
+cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md crates/fhv-app/assets/fonts/OFL-*.txt "$APP/Contents/Resources/"
 plutil -lint "$APP/Contents/Info.plist"
 codesign --force --deep --sign - "$APP"
 ln -s /Applications stage/dmg/Applications

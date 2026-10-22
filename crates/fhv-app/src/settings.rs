@@ -95,7 +95,7 @@ impl Settings {
             let _ = std::fs::create_dir_all(d);
         }
         if let Ok(b) = serde_json::to_vec_pretty(self) {
-            let _ = std::fs::write(p, b);
+            let _ = write_atomic(&p, &b);
         }
     }
 
@@ -104,4 +104,63 @@ impl Settings {
         self.recent.insert(0, p);
         self.recent.truncate(12);
     }
+}
+
+/// Writes a file via a temporary file and a rename, so a crash never
+/// leaves it truncated.
+pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// Files under the cache directory with size and modification time.
+fn cache_files(dir: &std::path::Path) -> Vec<(PathBuf, u64, std::time::SystemTime)> {
+    let mut out = Vec::new();
+    for sub in ["index", "transcoded"] {
+        if let Ok(rd) = std::fs::read_dir(dir.join(sub)) {
+            for e in rd.flatten() {
+                if let Ok(m) = e.metadata()
+                    && m.is_file()
+                {
+                    out.push((
+                        e.path(),
+                        m.len(),
+                        m.modified().unwrap_or(std::time::UNIX_EPOCH),
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Total size of the index cache and converted copies.
+pub fn cache_size(dir: &std::path::Path) -> u64 {
+    cache_files(dir).iter().map(|f| f.1).sum()
+}
+
+/// Deletes the oldest cache files until the cache is under `max_bytes`
+/// (`0` = delete everything). Files of open tabs are rebuilt if needed.
+pub fn evict_cache(dir: &std::path::Path, max_bytes: u64) -> u64 {
+    let mut files = cache_files(dir);
+    files.sort_by_key(|f| f.2);
+    let mut total: u64 = files.iter().map(|f| f.1).sum();
+    let mut freed = 0;
+    for (p, len, _) in files {
+        if total <= max_bytes {
+            break;
+        }
+        if std::fs::remove_file(&p).is_ok() {
+            total -= len;
+            freed += len;
+        }
+    }
+    freed
 }

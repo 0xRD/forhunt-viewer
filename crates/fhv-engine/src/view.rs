@@ -55,7 +55,11 @@ impl View {
             return None;
         }
         match &self.order {
-            Some(o) => o.iter().position(|&x| x == r).map(|p| p as u64),
+            // Row ids are unique in an order: any match is the match.
+            Some(o) => {
+                use rayon::prelude::*;
+                o.par_iter().position_any(|&x| x == r).map(|p| p as u64)
+            }
             None => Some(self.rows.rank(r) - 1),
         }
     }
