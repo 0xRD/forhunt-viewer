@@ -7,7 +7,15 @@ all-features = false
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # zbus_names / zvariant / zvariant_derive were folded back into the zbus
+    # crate (announcement: z-galaxy/zbus#2043); "unmaintained" as standalone
+    # crates, no vulnerability. Pulled in by accesskit (screen readers on
+    # Linux) via eframe. See DECISIONS.md D-007.
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus; no vulnerability" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus; no vulnerability" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus; no vulnerability" },
+]
 
 [licenses]
 version = 2

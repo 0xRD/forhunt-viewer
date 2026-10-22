@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 fhv-engine.workspace = true
+anyhow.workspace = true
+eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland", "clipboard", "accesskit"] }
 
 [lints]
 workspace = true
