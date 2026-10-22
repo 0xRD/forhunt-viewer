@@ -4,10 +4,23 @@ Last update: 2026-10-22 (session 1)
 
 ## Done
 - Owner decisions: unsigned macOS/Windows builds, Homebrew later (D-001, D-002)
-- PLAN.md, DECISIONS.md, BLOCKERS.md, STATUS.md, docs/PERF.md
+- Phase 0: PLAN/DECISIONS/BLOCKERS/STATUS/PERF, workspace, CI, cargo deny,
+  csv-gen (5 layouts + 33-file edge suite, checksummed)
+- Phase 1: virtual grid spike, 100 M-1 B rows under the 60 fps budget (D-005)
+- Phase 2: dialect/encoding detection, parallel quote-aware row index
+  (I/O-bound: 5 GiB in 2.6 s cold), pread access (D-008), index cache
+  (reopen 0.3-0.7 s), golden + differential tests
+- Phase 3: column indexes (dictionary bitmaps, time ticks, numbers, ragged
+  rows), filter engine (16 operators, AND/OR/NOT, any-column), multi-column
+  sort; proptests vs naive evaluation; acceptance benchmarks in docs/PERF.md
+  (one target missed: full sort of long free-text columns, D-013)
+- CI green on Linux/macOS/Windows at 9201626
+- CI is manual-dispatch only from now on (Actions minutes, D-017); macOS
+  release arm64 only (D-018)
 
 ## In progress
-- Phase 0: workspace scaffold, CI, cargo deny, csv-gen
+- Phase 4: app MVP
 
 ## Next
-- Phase 1: virtual grid spike (100 M rows, 60 fps)
+- Phase 5 packaging/release, phase 6 review + v0.1.0
+- CI perf gate (callgrind) script: to add with phase 5, run only on dispatch
