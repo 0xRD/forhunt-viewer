@@ -468,7 +468,18 @@ impl Table {
         self.index.read().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn header_rows(&self) -> u64 {
+    /// Transient read-only memory map of the data being viewed (the
+    /// original file or its transcoded copy), for random access during a
+    /// sort. Dropped by the caller as soon as it is done.
+    pub fn map_data(&self) -> Result<memmap2::Mmap> {
+        let src = self.source()?;
+        let f = File::open(src.path())?;
+        // SAFETY: read-only mapping of a file nothing writes to (see
+        // `Source::open`).
+        Ok(unsafe { memmap2::Mmap::map(&f)? })
+    }
+
+    pub fn header_rows(&self) -> u64 {
         self.dialect.header as u64
     }
 

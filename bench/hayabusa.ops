@@ -1,0 +1,21 @@
+# Acceptance operations on csv-gen --layout hayabusa (see docs/PERF.md)
+filter {"pred":{"target":{"column":"Level"},"op":"in","value":["high","crit"]}}
+filter {"pred":{"target":{"column":"Level"},"op":"not_in","value":["info"]}}
+filter {"pred":{"target":{"column":"EventID"},"op":"in","value":["4624","4625"]}}
+filter {"pred":{"target":{"column":"Details"},"op":"contains","value":"198.51.100.77 "}}
+filter {"pred":{"target":{"column":"Details"},"op":"contains","value":"198.51.100.77 "}}
+filter {"pred":{"target":{"column":"Details"},"op":"contains","value":"TgtUser: o'brien"}}
+filter {"pred":{"target":"any","op":"contains","value":"mimikatz"}}
+filter {"pred":{"target":"any","op":"contains","value":"LID: 0x1234"}}
+filter {"pred":{"target":{"column":"Timestamp"},"op":"between","value":["2024-03-10 00:00:00","2024-03-12 00:00:00"]}}
+filter {"pred":{"target":{"column":"RecordID"},"op":"gt","value":"4900000"}}
+filter {"and":[{"pred":{"target":{"column":"Level"},"op":"in","value":["high","crit"]}},{"pred":{"target":{"column":"Computer"},"op":"begins_with","value":"DC-"}}]}
+reset
+sort Timestamp
+sort Timestamp:desc
+sort Computer
+sort RecordID
+sort Details
+sort Computer,RecordID:desc
+filter {"pred":{"target":{"column":"Level"},"op":"in","value":["high","crit"]}}
+sort Details

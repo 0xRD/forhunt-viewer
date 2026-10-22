@@ -385,3 +385,67 @@ proptest! {
         })?;
     }
 }
+
+/// Long values sharing long prefixes (window refinement over many levels),
+/// mixed case, quotes with escapes, blanks; ascending and descending.
+#[test]
+fn long_shared_prefix_text_sort() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.csv");
+    let mut x = 7u64;
+    let mut vals = Vec::new();
+    let mut s = String::from("v,w\n");
+    for i in 0..3000 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let v = match x % 7 {
+            0 => String::new(),
+            1 => format!("Shared/Prefix/That/Is/Quite/Long/{:03}", x % 50),
+            2 => format!("shared/prefix/that/is/quite/long/{:03}/\"q\"", x % 50),
+            3 => format!(
+                "SHARED/PREFIX/THAT/IS/QUITE/LONG/{:03}/tail/{}",
+                x % 50,
+                x % 3
+            ),
+            _ => format!(
+                "shared/prefix/that/is/quite/long/{:03}{}",
+                x % 50,
+                "z".repeat((x % 40) as usize)
+            ),
+        };
+        s.push_str(&format!("\"{}\",{i}\n", v.replace('"', "\"\"")));
+        vals.push(v);
+    }
+    std::fs::write(&path, s).unwrap();
+    let mut opts = OpenOptions::new(dir.path().join("cache"));
+    opts.use_cache = false;
+    let t = Table::open(&path, opts).unwrap();
+    t.build().unwrap();
+    let rows: roaring::RoaringBitmap = (0..vals.len() as u32).collect();
+    for desc in [false, true] {
+        let got = sort(
+            &t,
+            &rows,
+            &[
+                SortKey { col: 0, desc },
+                SortKey {
+                    col: 1,
+                    desc: false,
+                },
+            ],
+        )
+        .unwrap();
+        let mut want: Vec<u32> = (0..vals.len() as u32).collect();
+        want.sort_by(|&a, &b| {
+            let o = fhv_engine::columns::text_cmp(
+                vals[a as usize].as_bytes(),
+                vals[b as usize].as_bytes(),
+            );
+            (if desc { o.reverse() } else { o }).then(a.cmp(&b))
+        });
+        assert_eq!(got, want, "desc={desc}");
+        let single = sort(&t, &rows, &[SortKey { col: 0, desc }]).unwrap();
+        assert_eq!(single, want, "single key desc={desc}");
+    }
+}

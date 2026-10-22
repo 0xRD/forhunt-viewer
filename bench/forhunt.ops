@@ -1,0 +1,17 @@
+# Acceptance operations on csv-gen --layout forhunt (see docs/PERF.md)
+filter {"pred":{"target":{"column":"EventId"},"op":"in","value":["4624","4625"]}}
+filter {"pred":{"target":{"column":"EventId"},"op":"not_in","value":["4624","4625"]}}
+filter {"pred":{"target":{"column":"Channel"},"op":"equals","value":"security"}}
+filter {"pred":{"target":{"column":"Payload"},"op":"contains","value":"whoami"}}
+filter {"pred":{"target":{"column":"Payload"},"op":"contains","value":"whoami"}}
+filter {"pred":{"target":{"column":"Payload"},"op":"contains","value":"DisableRealtimeMonitoring"}}
+filter {"pred":{"target":"any","op":"contains","value":"198.51.100.7"}}
+filter {"pred":{"target":{"column":"Payload"},"op":"regex","value":"-enc\\s+[A-Za-z0-9+/=]{40,}"}}
+filter {"pred":{"target":{"column":"TimeCreated"},"op":"between","value":["2024-03-10","2024-03-12"]}}
+reset
+sort TimeCreated
+sort TimeCreated:desc
+sort EventId
+sort RecordNumber
+sort PayloadData2
+sort Computer,TimeCreated:desc

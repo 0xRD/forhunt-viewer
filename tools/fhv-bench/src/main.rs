@@ -36,6 +36,16 @@ enum Cmd {
         #[arg(long)]
         cache: Option<PathBuf>,
     },
+    /// Filters and sorts on an indexed file (builds or loads the cache
+    /// first). Operations: `name|json Expr|sort cols` lines from --ops.
+    Query {
+        file: PathBuf,
+        /// One operation per line: `filter <json expr>` or `sort <col>[:desc],...`
+        #[arg(long)]
+        ops: PathBuf,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+    },
 }
 
 /// (peak RSS, current RSS anon, current RSS file) in MiB, Linux only.
@@ -56,8 +66,98 @@ fn mem() -> String {
     )
 }
 
+fn query(file: PathBuf, ops: PathBuf, cache: Option<PathBuf>) -> Result<()> {
+    use fhv_engine::{Engine, Expr, SortKey};
+    let cache = cache.unwrap_or_else(|| std::env::temp_dir().join("fhv-bench-cache"));
+    let t0 = Instant::now();
+    let table = Arc::new(Table::open(&file, OpenOptions::new(cache))?);
+    table.build()?;
+    println!(
+        "ready_s={:.3} from_cache={} rows={}",
+        t0.elapsed().as_secs_f64(),
+        table.from_cache.load(std::sync::atomic::Ordering::Relaxed),
+        table.row_count()
+    );
+    let engine = Engine::new(table.clone());
+    let col = |name: &str| -> Result<usize> {
+        table
+            .columns
+            .iter()
+            .position(|c| c == name)
+            .ok_or_else(|| anyhow::anyhow!("no column {name}"))
+    };
+    let mut last = roaring::RoaringBitmap::new();
+    last.insert_range(0..table.row_count() as u32);
+    for line in std::fs::read_to_string(&ops)?.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (kind, arg) = line.split_once(' ').unwrap_or((line, ""));
+        let t = Instant::now();
+        let detail = match kind {
+            "filter" => {
+                // Column names in the JSON are resolved: {"column":"Name"}.
+                let mut v: serde_json::Value = serde_json::from_str(arg)?;
+                resolve(&mut v, &col)?;
+                let e: Expr = serde_json::from_value(v)?;
+                last = engine.eval(&e)?;
+                format!("matches={}", last.len())
+            }
+            "sort" => {
+                let keys: Vec<SortKey> = arg
+                    .split(',')
+                    .map(|k| {
+                        let (n, d) = k.split_once(':').unwrap_or((k, ""));
+                        Ok(SortKey {
+                            col: col(n)?,
+                            desc: d == "desc",
+                        })
+                    })
+                    .collect::<Result<_>>()?;
+                let v = fhv_engine::sort::sort(&table, &last, &keys)?;
+                format!("sorted={}", v.len())
+            }
+            "reset" => {
+                last = roaring::RoaringBitmap::new();
+                last.insert_range(0..table.row_count() as u32);
+                "all rows".into()
+            }
+            _ => anyhow::bail!("unknown op {kind}"),
+        };
+        println!(
+            "op_ms={:>9.1} {detail:<18} {line}",
+            t.elapsed().as_secs_f64() * 1e3
+        );
+    }
+    println!("{}", mem());
+    Ok(())
+}
+
+/// Replaces `{"column": "Name"}` by `{"column": index}` in a JSON expr.
+fn resolve(v: &mut serde_json::Value, col: &dyn Fn(&str) -> Result<usize>) -> Result<()> {
+    match v {
+        serde_json::Value::Object(m) => {
+            if let Some(serde_json::Value::String(name)) = m.get("column").cloned() {
+                m.insert("column".into(), serde_json::Value::from(col(&name)?));
+            }
+            for (_, x) in m.iter_mut() {
+                resolve(x, col)?;
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for x in a {
+                resolve(x, col)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     match Cli::parse().cmd {
+        Cmd::Query { file, ops, cache } => query(file, ops, cache)?,
         Cmd::Index {
             file,
             access,

@@ -11,6 +11,8 @@ license.workspace = true
 fhv-engine.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+roaring.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

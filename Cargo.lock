@@ -1223,6 +1223,8 @@ dependencies = [
  "anyhow",
  "clap",
  "fhv-engine",
+ "roaring",
+ "serde_json",
 ]
 
 [[package]]

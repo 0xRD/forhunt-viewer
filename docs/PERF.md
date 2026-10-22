@@ -89,3 +89,88 @@ then two cache hits):
 \* page cache evicted by the previous run on the other 5 GB file; the cloud
 disk then delivered ~0.5 GB/s. The reopen time is reading + BLAKE3-checking
 + decoding the cache file; target < 1 s met.
+
+## Phase 3: column indexes, filters, sorts (2026-10-22)
+
+### Column pass
+
+`fhv-bench index FILE` with an empty cache (rows ready = row index done;
+columns = second pass building dictionaries, primary time ticks/permutation
+and ragged-row detection):
+
+| File | rows ready | column pass, first version | column pass, final | column index size |
+|---|---:|---:|---:|---:|
+| hayabusa-5g (20.3 M rows, 9 cols) | 1.57 s | 19.1 s | 3.78 s | 284 MiB (7 dictionaries + ticks) |
+| forhunt-5g (8.7 M rows, 26 cols) | 2.15 s | 27.6 s | 3.96 s | 169 MiB (15 dictionaries + ticks) |
+
+Profile of the first version (callgrind, 60 k rows, 1 thread):
+- `split_row`, byte-at-a-time: 31 %.
+- Roaring `push`, whose `max()` scans the bitmap store backwards on every insert: 20 %.
+
+Fixes:
+- `split_row` now uses the same SWAR special-byte skipping as the row index.
+- Bitmaps are built per block with `from_sorted_iter` in the parallel phase and OR-ed in the sequential merge.
+
+Total index (rows + columns) is 362 MiB for hayabusa-5g, i.e. 6.7 % of the
+file, and 202 MiB (3.8 %) for forhunt-5g. Reopen from cache:
+0.66 s / 0.30 s.
+
+### Filters and sorts
+
+`fhv-bench query FILE --ops bench/{hayabusa,forhunt}.ops` (ops files are in
+the repo; index loaded from cache). Times are per operation, 4 threads, warm
+page cache.
+
+hayabusa-5g, 20 332 544 rows:
+
+| Operation | Time | Matches | Target |
+|---|---:|---:|---|
+| `Level in [high, crit]` (dictionary) | 12 ms | 967 984 | < 100 ms ✓ |
+| `Level not in [info]` | 17 ms | 3 387 916 | < 100 ms ✓ |
+| `EventID in [4624, 4625]` | 4 ms | 5 079 313 | < 100 ms ✓ |
+| `Details contains "198.51.100.77 "` (scan, regex prefilter) | 547 ms | 20 341 | < 2 s ✓ |
+| same, again (cached) | 0.1 ms | | cached ✓ |
+| `Details contains "TgtUser: o'brien"` | 1 021 ms | 1 269 813 | < 2 s ✓ |
+| any column contains `mimikatz` | 618 ms | 242 380 | reported |
+| any column contains `LID: 0x1234` | 819 ms | 308 | reported |
+| `Timestamp between` (time index) | 124 ms | 800 000 | |
+| `RecordID > 4900000` (number scan) | 987 ms | 407 225 | |
+| `Level in [...] AND Computer begins with DC-` | 22 ms | 88 244 | |
+| sort Timestamp / desc (time index) | 170 / 317 ms | | "instant" ✓ |
+| sort Computer (dictionary) | 201 ms | | ✓ |
+| sort RecordID (number) | 2 247 ms | | < 3 s ✓ |
+| sort Computer, RecordID desc | 3 411 ms | | ~ |
+| sort Details (long free text, 20 M rows) | 11 435 ms | | < 3 s ✗ (D-013) |
+| sort Details, 968 k filtered rows | 808 ms | | ✓ |
+
+Peak RSS 6.3 GiB; anonymous memory 653 MiB. The peak is the transient
+read-only map used while resolving text ties, which counts as file-backed
+RSS (D-013). Without text sorts, peak RSS stays at ~1.3 GiB anonymous
+(first `query` run, before the window refinement existed).
+
+forhunt-5g, 8 667 136 rows:
+
+| Operation | Time | Matches |
+|---|---:|---:|
+| `EventId in [4624, 4625]` | 1.4 ms | 1 359 628 |
+| `EventId not in [...]` | 5.5 ms | 7 307 508 |
+| `Channel equals security` | 0.6 ms | 4 194 304 |
+| `Payload contains whoami` (last column, quoted JSON) | 2 001 ms | 180 545 |
+| same, again | 0.1 ms | |
+| `Payload contains DisableRealtimeMonitoring` | 501 ms | 3 283 |
+| any column contains `198.51.100.7` | 423 ms | 40 392 |
+| `Payload regex -enc\s+[A-Za-z0-9+/=]{40,}` (no prefilter) | 5 232 ms | 181 144 |
+| `TimeCreated between` | 81 ms | 576 722 |
+| sort TimeCreated / desc | 23 / 81 ms | |
+| sort EventId | 76 ms | |
+| sort RecordNumber | 1 057 ms | |
+| sort PayloadData2 (free text) | 7 214 ms | |
+| sort Computer, TimeCreated desc | 646 ms | |
+
+Sort iterations on hayabusa `Details`:
+- 8-byte prefix with per-row positional reads for ties: 32.6 s.
+- 24-byte inline key, window refinement on a transient map: 14.5 s.
+- Blocks return flat key buffers, and MSD pair sort: 12.1 s.
+- Tried and reverted:
+  - a plain comparison sort of borrowed cells: 26.8 s;
+  - cell reads in file order: no change.
