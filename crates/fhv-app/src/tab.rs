@@ -44,6 +44,7 @@ impl ColFilter {
 
 pub enum JobKind {
     Query,
+    CopyColumn,
     Search,
     Export(PathBuf),
 }
@@ -52,6 +53,7 @@ pub enum JobResult {
     View(View),
     Hits(RoaringBitmap),
     Exported(u64),
+    Text(String, u64),
 }
 
 pub struct Job {
@@ -95,6 +97,8 @@ pub struct Tab {
     rows_key: Option<(u64, Range<u64>)>,
     tz_name: String,
     last_query: Option<Query>,
+    /// Text the app should put on the clipboard (from a background job).
+    pub clipboard: Option<String>,
     /// Texts of the # column for the prepared rows.
     nums: Vec<String>,
     nums_first: u64,
@@ -170,6 +174,7 @@ impl Tab {
             last_query: None,
             nums: Vec::new(),
             nums_first: 0,
+            clipboard: None,
         })
     }
 
@@ -298,6 +303,34 @@ impl Tab {
         });
     }
 
+    /// Copies the values of file column `c` in the view (first 1 M rows),
+    /// one per line, in the background.
+    pub fn start_copy_column(&mut self, c: usize) {
+        if self.job.is_some() {
+            self.status = Some("busy: wait for the current operation".into());
+            return;
+        }
+        const MAX: usize = 1_000_000;
+        let rows: Vec<u32> = self.view.iter().take(MAX).collect();
+        let t = self.table.clone();
+        self.spawn(JobKind::CopyColumn, None, move || {
+            let mut out = String::new();
+            let mut buf = fhv_engine::Rows::default();
+            for (k, ch) in rows.chunks(4096).enumerate() {
+                if t.progress.cancelled() {
+                    return Err("cancelled".into());
+                }
+                t.read_row_list((k * 4096) as u64, ch, &mut buf)
+                    .map_err(|e| e.to_string())?;
+                for i in 0..ch.len() {
+                    out.push_str(buf.cell((k * 4096 + i) as u64, c));
+                    out.push('\n');
+                }
+            }
+            Ok(JobResult::Text(out, rows.len() as u64))
+        });
+    }
+
     fn start_search(&mut self) {
         let engine = self.engine.clone();
         let needle = self.search.clone();
@@ -370,6 +403,10 @@ impl Tab {
                             self.search_hits = Some(Arc::new(b));
                             self.status = None;
                         }
+                        Ok(JobResult::Text(text, n)) => {
+                            self.status = Some(format!("copied {n} values"));
+                            self.clipboard = Some(text);
+                        }
                         Ok(JobResult::Exported(n)) => {
                             self.status = Some(format!(
                                 "exported {n} rows in {:.1} s",
@@ -399,7 +436,7 @@ impl Tab {
             let superseded = match job.kind {
                 JobKind::Query => self.pending,
                 JobKind::Search => self.hits_for != self.search,
-                JobKind::Export(_) => false,
+                JobKind::Export(_) | JobKind::CopyColumn => false,
             };
             if superseded && !self.table.progress.cancelled() {
                 self.table.progress.cancel();
@@ -452,6 +489,7 @@ impl Tab {
             let what = match &j.kind {
                 JobKind::Query => "filtering / sorting".to_string(),
                 JobKind::Search => "searching".to_string(),
+                JobKind::CopyColumn => "copying column values".to_string(),
                 JobKind::Export(p) => format!(
                     "exporting to {} ({} rows)",
                     p.display(),

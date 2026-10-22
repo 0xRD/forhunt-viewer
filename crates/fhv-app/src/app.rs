@@ -112,6 +112,9 @@ pub struct App {
     pub(crate) help: bool,
     focus_search: bool,
     style: Style,
+    /// Fields of the row shown in the detail pane (read once per row, not
+    /// per frame): (file, data row, raw values, displayed values).
+    detail: Option<(PathBuf, u32, Vec<String>, Vec<String>)>,
     /// Hidden scroll benchmark (env FHV_BENCH_SCROLL=frames): frame times.
     bench: Option<(usize, Vec<f64>, Vec<f64>)>,
 }
@@ -149,6 +152,7 @@ impl App {
             evidence_dlg: None,
             help: false,
             focus_search: false,
+            detail: None,
             bench: std::env::var("FHV_BENCH_SCROLL")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -627,12 +631,27 @@ impl App {
             ui.label(RichText::new("Select a row").weak());
             return;
         };
-        let fields = match t.table.row_fields(row as u64) {
-            Ok(f) => f,
-            Err(e) => {
-                ui.colored_label(Color32::RED, e.to_string());
-                return;
+        let cached = self
+            .detail
+            .as_ref()
+            .is_some_and(|d| d.0 == t.path && d.1 == row);
+        if !cached {
+            match t.table.row_fields(row as u64) {
+                Ok(f) => {
+                    let shown = f
+                        .iter()
+                        .map(|v| pretty_json(v).unwrap_or_else(|| v.clone()))
+                        .collect();
+                    self.detail = Some((t.path.clone(), row, f, shown));
+                }
+                Err(e) => {
+                    ui.colored_label(Color32::RED, e.to_string());
+                    return;
+                }
             }
+        }
+        let Some((_, _, fields, shown_all)) = &self.detail else {
+            return;
         };
         ui.horizontal(|ui| {
             ui.heading(format!("Row {}", row as u64 + 1));
@@ -676,8 +695,7 @@ impl App {
                                 }
                             });
                             ui.vertical(|ui| {
-                                let shown = pretty_json(v).unwrap_or_else(|| v.clone());
-                                let mut text = shown.as_str();
+                                let mut text = shown_all[i].as_str();
                                 ui.add(
                                     egui::TextEdit::multiline(&mut text)
                                         .font(egui::TextStyle::Monospace)
@@ -909,7 +927,7 @@ impl App {
                 }
                 HeaderAction::Hide(c) => t.order.retain(|&x| x != c),
                 HeaderAction::Freeze(n) => t.grid.frozen = n,
-                HeaderAction::CopyColumn(c) => copy_column(ui.ctx(), t, c),
+                HeaderAction::CopyColumn(c) => t.start_copy_column(c),
             }
         }
         if let Some(a) = cell_action {
@@ -1531,32 +1549,6 @@ fn copy_selected_row(ctx: &egui::Context, t: &mut Tab) {
     }
 }
 
-/// Values of a column in the view, one per line (first 1 M rows).
-fn copy_column(ctx: &egui::Context, t: &mut Tab, c: usize) {
-    const MAX: usize = 1_000_000;
-    let rows: Vec<u32> = t.view.iter().take(MAX).collect();
-    let mut out = String::new();
-    let mut buf = fhv_engine::Rows::default();
-    for (k, ch) in rows.chunks(4096).enumerate() {
-        if t.table
-            .read_row_list((k * 4096) as u64, ch, &mut buf)
-            .is_err()
-        {
-            break;
-        }
-        for i in 0..ch.len() {
-            out.push_str(buf.cell((k * 4096 + i) as u64, c));
-            out.push('\n');
-        }
-    }
-    t.status = Some(if t.view.len() as usize > MAX {
-        format!("copied the first {MAX} values")
-    } else {
-        format!("copied {} values", rows.len())
-    });
-    ctx.copy_text(out);
-}
-
 fn pretty_json(v: &str) -> Option<String> {
     let s = v.trim_start();
     if !(s.starts_with('{') || s.starts_with('[')) || v.len() > 2_000_000 {
@@ -1610,6 +1602,9 @@ impl eframe::App for App {
         let mut running = false;
         for t in &mut self.tabs {
             running |= t.poll(&tz);
+            if let Some(text) = t.clipboard.take() {
+                ctx.copy_text(text);
+            }
         }
         if running {
             // Progress refresh only: background work does not need 60 fps.
