@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX v5 source of the forhunt-viewer MSI (per-machine).
+  Registers forhunt-viewer under "Open with" for .csv / .tsv / .txt through
+  OpenWithProgids; it never becomes the default handler.
+  Build: wix build -arch x64 -d Version=X.Y.Z -d BinDir=DIR forhunt-viewer.wxs -o out.msi
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="forhunt-viewer"
+           Manufacturer="forhunt-viewer contributors"
+           Version="$(var.Version)"
+           UpgradeCode="6E7C2B44-1F0A-4C55-9B7A-3D1E4F2A8C61"
+           Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of forhunt-viewer is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="AppIcon" SourceFile="$(var.BinDir)\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/0xRD/forhunt-viewer" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="forhunt-viewer">
+        <Component Id="MainExe" Guid="3B0D8E7A-5C1F-4E29-8A6B-9F2C7D4E1A05">
+          <File Id="Exe" Source="$(var.BinDir)\forhunt-viewer.exe" KeyPath="yes">
+            <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="forhunt-viewer"
+                      WorkingDirectory="INSTALLFOLDER" Icon="AppIcon" Advertise="yes" />
+          </File>
+          <File Id="LicenseMit" Source="$(var.BinDir)\LICENSE-MIT" />
+          <File Id="LicenseApache" Source="$(var.BinDir)\LICENSE-APACHE" />
+          <File Id="ThirdParty" Source="$(var.BinDir)\THIRD-PARTY.md" />
+
+          <!-- ProgID used by the Open With entries. -->
+          <RegistryValue Root="HKLM" Key="Software\Classes\forhunt-viewer.table" Value="Table (forhunt-viewer)" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\forhunt-viewer.table\DefaultIcon" Value="[INSTALLFOLDER]forhunt-viewer.exe,0" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\forhunt-viewer.table\shell\open\command" Value="&quot;[INSTALLFOLDER]forhunt-viewer.exe&quot; &quot;%1&quot;" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\.csv\OpenWithProgids" Name="forhunt-viewer.table" Value="" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\.tsv\OpenWithProgids" Name="forhunt-viewer.table" Value="" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\.txt\OpenWithProgids" Name="forhunt-viewer.table" Value="" Type="string" />
+          <!-- "Open with > Choose another app" list. -->
+          <RegistryValue Root="HKLM" Key="Software\Classes\Applications\forhunt-viewer.exe\shell\open\command" Value="&quot;[INSTALLFOLDER]forhunt-viewer.exe&quot; &quot;%1&quot;" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\Applications\forhunt-viewer.exe\SupportedTypes" Name=".csv" Value="" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\Applications\forhunt-viewer.exe\SupportedTypes" Name=".tsv" Value="" Type="string" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main">
+      <ComponentRef Id="MainExe" />
+    </Feature>
+  </Package>
+</Wix>

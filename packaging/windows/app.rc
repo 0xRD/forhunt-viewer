@@ -1,0 +1,2 @@
+// Windows resources: application icon (shown in Explorer, taskbar, "Open with").
+1 ICON "../icons/icon.ico"

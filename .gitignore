@@ -2,3 +2,5 @@
 *.csv.idx
 /bench-data
 .DS_Store
+/dist
+/stage

@@ -16,7 +16,8 @@ authors = ["0xRD"]
 fhv-engine = { path = "crates/fhv-engine", version = "0.1.0" }
 anyhow = "1"
 thiserror = "2"
-blake3 = "1"
+# Pure Rust: we hash ~192 KiB per file; no C toolchain needed for cross builds.
+blake3 = { version = "1", features = ["pure"] }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 crossbeam-channel = "0.5"
 memchr = "2"

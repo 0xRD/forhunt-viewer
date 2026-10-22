@@ -1,4 +1,7 @@
 //! forhunt-viewer: a fast timeline / CSV viewer for forensic analysts.
+
+// No console window on Windows release builds.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 //!
 //! ```text
 //! forhunt-viewer [FILE...]
@@ -7,6 +10,8 @@
 mod app;
 mod fonts;
 mod grid;
+#[cfg(target_os = "macos")]
+mod macos;
 mod session;
 mod settings;
 mod spike;
@@ -45,7 +50,12 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("forhunt-viewer")
             .with_inner_size([1500.0, 900.0])
-            .with_drag_and_drop(true),
+            .with_drag_and_drop(true)
+            .with_icon(egui::IconData {
+                rgba: include_bytes!("../../../packaging/icons/icon-128.rgba").to_vec(),
+                width: 128,
+                height: 128,
+            }),
         ..Default::default()
     };
     opts.glow_options.vsync = bench.is_none() && std::env::var_os("FHV_BENCH_SCROLL").is_none();
@@ -57,7 +67,11 @@ fn main() -> eframe::Result {
                 fonts::install(&cc.egui_ctx);
                 Ok(Box::new(spike::Spike::new(rows, bench)) as Box<dyn eframe::App>)
             }
-            None => Ok(Box::new(app::App::new(cc, files))),
+            None => {
+                #[cfg(target_os = "macos")]
+                macos::install(&cc.egui_ctx);
+                Ok(Box::new(app::App::new(cc, files)))
+            }
         }),
     )
 }

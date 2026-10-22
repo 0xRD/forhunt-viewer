@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>forhunt-viewer</string>
+  <key>CFBundleDisplayName</key><string>forhunt-viewer</string>
+  <key>CFBundleIdentifier</key><string>io.github.0xrd.forhunt-viewer</string>
+  <key>CFBundleExecutable</key><string>forhunt-viewer</string>
+  <key>CFBundleIconFile</key><string>icon.icns</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>CFBundleVersion</key><string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSHumanReadableCopyright</key><string>MIT OR Apache-2.0</string>
+  <!-- Listed in Finder's "Open With" for CSV/TSV without becoming the
+       default application (LSHandlerRank Alternate). -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>CSV document</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.comma-separated-values-text</string>
+        <string>public.tab-separated-values-text</string>
+        <string>public.plain-text</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>

@@ -1602,6 +1602,10 @@ impl eframe::App for App {
         for p in dropped {
             self.open(&p);
         }
+        #[cfg(target_os = "macos")]
+        for p in crate::macos::take_opened() {
+            self.open(&p);
+        }
         let tz = self.tz.name.clone();
         let mut running = false;
         for t in &mut self.tabs {

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=forhunt-viewer
+GenericName=Timeline / CSV viewer
+Comment=Fast viewer for multi-GB forensic CSV timelines
+Exec=forhunt-viewer %F
+Icon=forhunt-viewer
+Terminal=false
+Categories=Utility;Viewer;Office;
+MimeType=text/csv;text/tab-separated-values;text/comma-separated-values;
