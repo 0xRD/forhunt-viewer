@@ -18,9 +18,15 @@ Last update: 2026-10-22 (session 1)
 - CI is manual-dispatch only from now on (Actions minutes, D-017); macOS
   release arm64 only (D-018)
 
-## In progress
-- Phase 4: app MVP
+- Phase 4: app MVP (all brief items; see README), egui_kittest smoke tests,
+  real-size check under Xvfb (60 fps scrolling on 20 M rows, PERF.md)
+- Phase 5: icons, macOS .app/.dmg + Open With delegate, Windows MSI/zip,
+  Linux tarball/AppImage, release workflow (tag / dispatch only), README,
+  THIRD-PARTY.md, callgrind perf gate (+0.02 % noise)
 
-## Next
-- Phase 5 packaging/release, phase 6 review + v0.1.0
-- CI perf gate (callgrind) script: to add with phase 5, run only on dispatch
+## In progress
+- Phase 6: fresh-eyes review + perf analysis (Sonnet agents), fixes, v0.1.0
+
+## Not verifiable here
+- macOS / Windows packaging and the macOS Open With delegate run only in
+  the release workflow (no Mac / Windows machine in the build container).
