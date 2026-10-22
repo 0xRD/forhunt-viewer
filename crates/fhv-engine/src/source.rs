@@ -68,8 +68,12 @@ impl Source {
             return Ok(&m[start as usize..end as usize]);
         }
         let n = (end - start) as usize;
-        buf.clear();
-        buf.resize(n, 0);
+        // Reused buffers keep their length: only growth is zeroed; the read
+        // overwrites the rest (no memset over every block).
+        buf.truncate(n);
+        if buf.len() < n {
+            buf.resize(n, 0);
+        }
         read_exact_at(&self.file, buf, start)?;
         Ok(&buf[..])
     }

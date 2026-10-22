@@ -1,0 +1,512 @@
+--- a/crates/fhv-engine/src/scan.rs	2026-10-22 20:10:47.836129202 +0000
++++ b/crates/fhv-engine/src/scan.rs	2026-10-22 20:15:58.699096998 +0000
+@@ -214,66 +214,63 @@
+     pub quoted: bool,
+ }
+ 
++/// End of the field that starts at `start` (index of its delimiter, or
++/// `row.len()`) and whether it is quoted. Same semantics as the state
++/// machine, but quoted fields are skipped with `memchr` on the quote byte
++/// only (delimiters inside quotes are data) and other fields with `memchr`
++/// on the delimiter.
++#[inline]
++fn field_end(t: &Tables, row: &[u8], start: usize) -> (usize, bool) {
++    let n = row.len();
++    let q = t.quote;
++    if q != t.delim && start < n && row[start] == q {
++        let mut p = start + 1;
++        loop {
++            match memchr::memchr(q, &row[p..]) {
++                None => return (n, true),
++                Some(k) => {
++                    let a = p + k;
++                    if row.get(a + 1) == Some(&q) {
++                        p = a + 2;
++                    } else {
++                        p = a + 1;
++                        break;
++                    }
++                }
++            }
++        }
++        // Closing quote seen: the field ends at the next delimiter, text in
++        // between is literal.
++        let end = if p >= n || row[p] == t.delim {
++            p.min(n)
++        } else {
++            memchr::memchr(t.delim, &row[p..]).map_or(n, |k| p + k)
++        };
++        (end, true)
++    } else {
++        let end = memchr::memchr(t.delim, &row[start.min(n)..]).map_or(n, |k| start + k);
++        (end, false)
++    }
++}
++
+ /// Splits one row (without its line terminator) into fields.
+ /// Returns the number of fields (`out` holds them).
+-///
+-/// Like [`scan_chunk`], only delimiter and quote bytes are visited (found 8
+-/// at a time); a gap of other bytes applies the idempotent "other"
+-/// transition once. Newlines inside a row can only be inside quotes, where
+-/// they are data, so they count as other bytes.
+ pub fn split_row(t: &Tables, row: &[u8], out: &mut Vec<Span>) -> usize {
+     out.clear();
++    let n = row.len();
+     let mut start = 0usize;
+-    let mut quoted = false;
+-    let mut state = S;
+-    let mut fed = 0usize;
+-    let mut special = |i: usize, state: &mut u8, fed: &mut usize| {
+-        if i > *fed {
+-            *state = step(*state, C_OTHER);
+-        }
+-        *fed = i + 1;
+-        let c = t.class[row[i] as usize];
+-        if c == C_DELIM && *state != Q {
+-            out.push(Span {
+-                start: start as u32,
+-                end: i as u32,
+-                quoted,
+-            });
+-            start = i + 1;
+-            quoted = false;
+-            *state = S;
+-            return;
+-        }
+-        if c == C_QUOTE && *state == S {
+-            quoted = true;
+-        }
+-        *state = step(*state, c);
+-    };
+-    let (words, rest) = row.as_chunks::<8>();
+-    let mut base = 0usize;
+-    for w in words {
+-        let w = u64::from_le_bytes(*w);
+-        let mut m = eq_mask(w, t.delim) | eq_mask(w, t.quote);
+-        while m != 0 {
+-            special(
+-                base + (m.trailing_zeros() / 8) as usize,
+-                &mut state,
+-                &mut fed,
+-            );
+-            m &= m - 1;
+-        }
+-        base += 8;
+-    }
+-    for (j, &b) in rest.iter().enumerate() {
+-        if b == t.delim || b == t.quote {
+-            special(base + j, &mut state, &mut fed);
++    loop {
++        let (end, quoted) = field_end(t, row, start);
++        out.push(Span {
++            start: start as u32,
++            end: end as u32,
++            quoted,
++        });
++        if end >= n {
++            break;
+         }
++        start = end + 1;
+     }
+-    out.push(Span {
+-        start: start as u32,
+-        end: row.len() as u32,
+-        quoted,
+-    });
+     out.len()
+ }
+ 
+@@ -311,94 +308,64 @@
+ }
+ 
+ /// Span of field `col` of a row, or `None` when the row has fewer fields.
+-/// Rows without any quote byte are split with `memchr` (the common case).
+ pub fn nth_field(t: &Tables, row: &[u8], col: usize) -> Option<Span> {
+-    if t.quote == t.delim || memchr::memchr(t.quote, row).is_none() {
+-        let mut start = 0usize;
+-        let mut it = memchr::memchr_iter(t.delim, row);
+-        for _ in 0..col {
+-            start = it.next()? + 1;
+-        }
+-        let end = it.next().unwrap_or(row.len());
+-        return Some(Span {
+-            start: start as u32,
+-            end: end as u32,
+-            quoted: false,
+-        });
+-    }
+-    let mut field = 0usize;
++    let n = row.len();
+     let mut start = 0usize;
+-    let mut quoted = false;
+-    let mut state = S;
+-    for (i, &b) in row.iter().enumerate() {
+-        let c = t.class[b as usize];
+-        if c == C_DELIM && state != Q {
+-            if field == col {
+-                return Some(Span {
+-                    start: start as u32,
+-                    end: i as u32,
+-                    quoted,
+-                });
+-            }
+-            field += 1;
+-            start = i + 1;
+-            quoted = false;
+-            state = S;
+-            continue;
++    for _ in 0..col {
++        let (end, _) = field_end(t, row, start);
++        if end >= n {
++            return None;
+         }
+-        if c == C_QUOTE && state == S {
+-            quoted = true;
+-        }
+-        let c = if c == C_NL { C_OTHER } else { c };
+-        state = step(state, c);
++        start = end + 1;
+     }
+-    (field == col).then_some(Span {
++    let (end, quoted) = field_end(t, row, start);
++    Some(Span {
+         start: start as u32,
+-        end: row.len() as u32,
++        end: end as u32,
+         quoted,
+     })
+ }
+ 
+ /// Number of fields of a row.
+ pub fn count_fields(t: &Tables, row: &[u8]) -> usize {
+-    if t.quote == t.delim || memchr::memchr(t.quote, row).is_none() {
+-        return memchr::memchr_iter(t.delim, row).count() + 1;
+-    }
+-    let mut n = 1;
+-    let mut state = S;
+-    for &b in row {
+-        let c = t.class[b as usize];
+-        if c == C_DELIM && state != Q {
+-            n += 1;
+-            state = S;
+-            continue;
++    let n = row.len();
++    let mut start = 0usize;
++    let mut c = 1;
++    loop {
++        let (end, _) = field_end(t, row, start);
++        if end >= n {
++            return c;
+         }
+-        let c = if c == C_NL { C_OTHER } else { c };
+-        state = step(state, c);
++        start = end + 1;
++        c += 1;
+     }
+-    n
+ }
+ 
+ /// Decodes a quoted field: drops the opening quote, the closing quote and
+ /// un-doubles `""`; text after the closing quote is kept literally.
+ pub fn unquote(raw: &[u8], quote: u8, out: &mut Vec<u8>) {
+     out.clear();
++    out.reserve(raw.len());
+     let mut i = 1; // skip opening quote
+-    let mut inside = true;
+     while i < raw.len() {
+-        let b = raw[i];
+-        if inside && b == quote {
+-            if raw.get(i + 1) == Some(&quote) {
+-                out.push(quote);
+-                i += 2;
+-                continue;
++        match memchr::memchr(quote, &raw[i..]) {
++            None => {
++                out.extend_from_slice(&raw[i..]);
++                return;
++            }
++            Some(k) => {
++                let a = i + k;
++                out.extend_from_slice(&raw[i..a]);
++                if raw.get(a + 1) == Some(&quote) {
++                    out.push(quote);
++                    i = a + 2;
++                } else {
++                    // Closing quote: the rest is literal.
++                    out.extend_from_slice(&raw[a + 1..]);
++                    return;
++                }
+             }
+-            inside = false;
+-            i += 1;
+-            continue;
+         }
+-        out.push(b);
+-        i += 1;
+     }
+ }
+ 
+@@ -486,6 +453,34 @@
+             }
+         }
+     }
++
++    #[test]
++    fn memchr_split_matches_simple_fuzz() {
++        let mut x = 0x9e37_79b9_7f4a_7c15u64;
++        for (d, q) in [(b',', Some(b'"')), (b';', None)] {
++            let t = Tables::new(d, q);
++            for len in 0..80 {
++                for _ in 0..400 {
++                    let row: Vec<u8> = (0..len)
++                        .map(|_| {
++                            x ^= x << 13;
++                            x ^= x >> 7;
++                            x ^= x << 17;
++                            b"ab,;\"\"\r\n"[(x % 8) as usize]
++                        })
++                        .collect();
++                    let (mut a, mut b) = (Vec::new(), Vec::new());
++                    split_row(&t, &row, &mut a);
++                    split_row_simple(&t, &row, &mut b);
++                    assert_eq!(a, b, "{:?}", String::from_utf8_lossy(&row));
++                    assert_eq!(count_fields(&t, &row), b.len());
++                    for c in 0..b.len() + 1 {
++                        assert_eq!(nth_field(&t, &row, c), b.get(c).copied());
++                    }
++                }
++            }
++        }
++    }
+ 
+     #[test]
+     fn swar_scan_matches_simple() {
+--- a/crates/fhv-engine/src/source.rs	2026-10-22 20:10:47.836163696 +0000
++++ b/crates/fhv-engine/src/source.rs	2026-10-22 20:19:16.590415811 +0000
+@@ -68,8 +68,12 @@
+             return Ok(&m[start as usize..end as usize]);
+         }
+         let n = (end - start) as usize;
+-        buf.clear();
+-        buf.resize(n, 0);
++        // Reused buffers keep their length: only a growth is zeroed, the
++        // read overwrites the rest (no memset pass over every block).
++        buf.truncate(n);
++        if buf.len() < n {
++            buf.resize(n, 0);
++        }
+         read_exact_at(&self.file, buf, start)?;
+         Ok(&buf[..])
+     }
+--- a/crates/fhv-engine/src/filter.rs	2026-10-22 20:10:47.836181289 +0000
++++ b/crates/fhv-engine/src/filter.rs	2026-10-22 20:20:52.697092373 +0000
+@@ -399,6 +399,9 @@
+     /// predicate (raw bytes; quoted cells hold the literal unless it has a
+     /// quote). `None` = scan every row.
+     fn prefilter(&self) -> Option<Regex> {
++        if let Op::Regex(r) = &self.op {
++            return regex_prefilter(r, self.ci);
++        }
+         let lits: Vec<&Vec<u8>> = match &self.op {
+             Op::Equals(_) | Op::Contains(_) | Op::BeginsWith(_) | Op::EndsWith(_) | Op::In(_) => {
+                 self.needles.iter().collect()
+@@ -445,6 +448,37 @@
+     }
+ }
+ 
++/// Prefilter for a user regex: the literal prefixes every match must start
++/// with (regex-syntax extraction, case folding included), as an alternation
++/// searched over raw block bytes. `None` when no useful literal set exists.
++fn regex_prefilter(pattern: &str, ci: bool) -> Option<Regex> {
++    use regex_syntax::hir::literal::{ExtractKind, Extractor};
++    let hir = regex_syntax::ParserBuilder::new()
++        .case_insensitive(ci)
++        .build()
++        .parse(pattern)
++        .ok()?;
++    let mut seq = Extractor::new()
++        .kind(ExtractKind::Prefix)
++        .limit_total(64)
++        .extract(&hir);
++    seq.optimize_for_prefix_by_preference();
++    let lits = seq.literals()?;
++    if lits.is_empty() || lits.len() > 64 {
++        return None;
++    }
++    let mut alts = Vec::with_capacity(lits.len());
++    for l in lits {
++        let b = l.as_bytes();
++        // Too short to be selective, or spelled differently in the file.
++        if b.len() < 2 || b.iter().any(|c| matches!(c, b'"' | b'\n' | b'\r')) {
++            return None;
++        }
++        alts.push(regex::escape(std::str::from_utf8(b).ok()?));
++    }
++    RegexBuilder::new(&alts.join("|")).unicode(true).build().ok()
++}
++
+ const SCAN_BLOCK: u64 = 32_768;
+ 
+ /// Evaluates expressions over a table, caching leaf results.
+--- a/crates/fhv-engine/src/columns.rs	2026-10-22 20:10:47.836205884 +0000
++++ b/crates/fhv-engine/src/columns.rs	2026-10-22 20:30:14.217761164 +0000
+@@ -255,6 +255,7 @@
+     /// Per dictionary column: local values and their row bitmaps.
+     dicts: Vec<Option<ValueBitmaps>>,
+     ticks: Vec<i64>,
++    rows: u64,
+ }
+ 
+ /// Builds the column indexes of a fully indexed table.
+@@ -325,6 +326,7 @@
+                 ragged: Vec::new(),
+                 dicts: Vec::new(),
+                 ticks: Vec::with_capacity(if primary_time.is_some() { b.len() } else { 0 }),
++                rows: b.len() as u64,
+             };
+             // Per dictionary column: local values and per-row local codes.
+             let mut local: Vec<Option<LocalCodes>> = (0..ncols)
+@@ -408,6 +410,7 @@
+             out
+         },
+         |_first, out| {
++            let out_rows = out.rows;
+             for r in out.ragged {
+                 let _ = ragged.try_push(r);
+             }
+@@ -439,7 +442,7 @@
+             table
+                 .progress
+                 .bytes
+-                .fetch_add(BLOCK_ROWS, std::sync::atomic::Ordering::Relaxed);
++                .fetch_add(out_rows, std::sync::atomic::Ordering::Relaxed);
+             Ok(())
+         },
+     )?;
+--- a/crates/fhv-engine/src/table.rs	2026-10-22 20:10:47.836233718 +0000
++++ b/crates/fhv-engine/src/table.rs	2026-10-22 20:45:30.639442691 +0000
+@@ -675,40 +675,87 @@
+         let src = self.source()?;
+         let h = self.header_rows();
+         let window = rayon::current_num_threads().max(1) * 4;
+-        for w in blocks.chunks(window) {
+-            if self.progress.cancelled() {
+-                return Err(Error::Cancelled);
++        // Cap the bytes of a block (a block of wide rows would otherwise be
++        // the whole file in memory, and a 20 MiB block does not fit in cache).
++        let cap: u64 = std::env::var("FHV_BLOCK_BYTES")
++            .ok()
++            .and_then(|v| v.parse().ok())
++            .unwrap_or(4 << 20);
++        let split: Vec<Range<u64>> = {
++            let ix = self.index();
++            let mut out = Vec::with_capacity(blocks.len());
++            for r in blocks {
++                let mut a = r.start;
++                let mut base = ix.start(a + h);
++                for i in r.start + 1..r.end {
++                    if ix.start(i + h) - base >= cap {
++                        out.push(a..i);
++                        a = i;
++                        base = ix.start(i + h);
++                    }
++                }
++                out.push(a..r.end);
+             }
+-            // Row offsets of each block, taken under one read lock.
+-            let offsets: Vec<Vec<u64>> = {
+-                let ix = self.index();
+-                w.iter()
+-                    .map(|r| {
+-                        let mut v: Vec<u64> = (r.start..r.end).map(|i| ix.start(i + h)).collect();
+-                        v.push(ix.range(r.end - 1 + h).end);
+-                        v
+-                    })
+-                    .collect()
+-            };
+-            let out: Vec<Result<T>> = w
+-                .par_iter()
+-                .zip(offsets.par_iter())
+-                .map_init(Vec::new, |buf, (r, offs)| {
+-                    let base = offs[0];
+-                    let bytes = src.read(base..offs[offs.len() - 1], buf)?;
+-                    Ok(map(&Block {
+-                        first: r.start,
+-                        base,
+-                        offs,
+-                        bytes,
+-                    }))
+-                })
+-                .collect();
+-            for (r, t) in w.iter().zip(out) {
+-                consume(r.start, t?)?;
++            out
++        };
++        let blocks = &split[..];
++        // Producer: the rayon pool maps windows of blocks; consumer (this
++        // thread) merges finished blocks in order while the next window is
++        // being mapped (the merge is serial, and used to idle the pool).
++        let (tx, rx) = std::sync::mpsc::sync_channel::<Result<(u64, T)>>(window * 2);
++        let mut result = Ok(());
++        let map = &map;
++        std::thread::scope(|sc| {
++            sc.spawn(move || {
++                for w in blocks.chunks(window) {
++                    if self.progress.cancelled() {
++                        let _ = tx.send(Err(Error::Cancelled));
++                        return;
++                    }
++                    // Row offsets of each block, taken under one read lock.
++                    let offsets: Vec<Vec<u64>> = {
++                        let ix = self.index();
++                        w.iter()
++                            .map(|r| {
++                                let mut v: Vec<u64> =
++                                    (r.start..r.end).map(|i| ix.start(i + h)).collect();
++                                v.push(ix.range(r.end - 1 + h).end);
++                                v
++                            })
++                            .collect()
++                    };
++                    let out: Vec<Result<T>> = w
++                        .par_iter()
++                        .zip(offsets.par_iter())
++                        .map_init(Vec::new, |buf, (r, offs)| {
++                            let base = offs[0];
++                            let bytes = src.read(base..offs[offs.len() - 1], buf)?;
++                            Ok(map(&Block {
++                                first: r.start,
++                                base,
++                                offs,
++                                bytes,
++                            }))
++                        })
++                        .collect();
++                    for (r, t) in w.iter().zip(out) {
++                        if tx.send(t.map(|t| (r.start, t))).is_err() {
++                            return;
++                        }
++                    }
++                }
++            });
++            for m in rx {
++                match m.and_then(|(first, t)| consume(first, t)) {
++                    Ok(()) => {}
++                    Err(e) => {
++                        result = Err(e);
++                        break;
++                    }
++                }
+             }
+-        }
+-        Ok(())
++        });
++        result
+     }
+ 
+     pub fn tables(&self) -> &Tables {
+--- a/Cargo.toml (workspace.dependencies)
++regex-syntax = "0.8"
+--- a/crates/fhv-engine/Cargo.toml (dependencies)
++regex-syntax.workspace = true

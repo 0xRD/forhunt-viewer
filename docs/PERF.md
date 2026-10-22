@@ -204,3 +204,29 @@ UI problems this check found, both fixed:
 - Global search started a scan per keystroke. Input is now debounced
   (250 ms) and superseded work is cancelled.
 - The filter chip line made the grid jump.
+
+## Phase 6: perf review fixes (2026-10-22)
+
+A perf analysis (docs/PERF-REVIEW.md, prototype in
+docs/perf-review-prototype.diff) found five items. Merged:
+
+- F1 (review R-005): parallel blocks capped by bytes as well as rows.
+  Wide-row file (4 000 x 100 KB): rows ready 1.69 -> 0.22 s, peak RSS
+  818 -> 269 MiB.
+- F2: field splitting finds quotes / delimiters / newlines with `memchr`
+  (`scan::field_end`) and `unquote` copies runs in bulk. 5g `sort
+  PayloadData2` (quoted column, 8.7 M rows): 5.4-5.8 s -> 2.9-3.5 s.
+- F3: user regexes get a literal prefix prefilter (regex-syntax
+  `Extractor`), used only when the literal set is finite and has no empty,
+  quote or newline literal. 5g regex `-enc`: 4.4 s -> 0.54-0.60 s.
+- F5: `Source::read` no longer zero-fills its buffer.
+
+Measured by the review agent (method and raw numbers in PERF-REVIEW.md).
+Perf gate on the merged code (`scripts/bench-gate.sh HEAD`, callgrind, 1
+thread):
+
+```
+head: 2861260810 instructions
+base: 3703944836 instructions (HEAD)
+change: -22.75%
+```

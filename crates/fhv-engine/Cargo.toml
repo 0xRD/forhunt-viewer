@@ -15,6 +15,7 @@ memchr.workspace = true
 memmap2.workspace = true
 rayon.workspace = true
 regex.workspace = true
+regex-syntax.workspace = true
 roaring.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true

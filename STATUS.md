@@ -24,8 +24,12 @@ Last update: 2026-10-22 (session 1)
   Linux tarball/AppImage, release workflow (tag / dispatch only), README,
   THIRD-PARTY.md, callgrind perf gate (+0.02 % noise)
 
+- Phase 6: fresh-eyes review (REVIEW.md, resolution table) and perf
+  analysis (docs/PERF-REVIEW.md) done; fixes merged (D-030, perf gate
+  -22.75 %)
+
 ## In progress
-- Phase 6: fresh-eyes review + perf analysis (Sonnet agents), fixes, v0.1.0
+- v0.1.0: CI dispatch (Linux), then release workflow
 
 ## Not verifiable here
 - macOS / Windows packaging and the macOS Open With delegate run only in

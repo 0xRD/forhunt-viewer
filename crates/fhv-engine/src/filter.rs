@@ -399,30 +399,14 @@ impl Compiled {
     /// predicate (raw bytes; quoted cells hold the literal unless it has a
     /// quote). `None` = scan every row.
     fn prefilter(&self) -> Option<Regex> {
-        let lits: Vec<&Vec<u8>> = match &self.op {
+        let lits: Vec<Vec<u8>> = match &self.op {
             Op::Equals(_) | Op::Contains(_) | Op::BeginsWith(_) | Op::EndsWith(_) | Op::In(_) => {
-                self.needles.iter().collect()
+                self.needles.clone()
             }
+            Op::Regex(p) => return regex_prefilter(p, self.ci),
             _ => return None,
         };
-        // A literal with a quote may be spelled `""` in the file; one with a
-        // newline could hide an overlapping match in the next row.
-        if lits.is_empty()
-            || lits
-                .iter()
-                .any(|l| l.is_empty() || l.iter().any(|b| matches!(b, b'"' | b'\n' | b'\r')))
-        {
-            return None;
-        }
-        let alts: Vec<String> = lits
-            .iter()
-            .map(|l| regex::escape(&String::from_utf8_lossy(l)))
-            .collect();
-        RegexBuilder::new(&alts.join("|"))
-            .case_insensitive(self.ci)
-            .unicode(true)
-            .build()
-            .ok()
+        literal_prefilter(&lits, self.ci)
     }
 
     fn is_negative(&self) -> bool {
@@ -443,6 +427,51 @@ impl Compiled {
             _ => return None,
         })
     }
+}
+
+/// Prefilter regex from literals: `None` when a literal could be spelled
+/// differently in the raw bytes (a quote, written `""`) or a newline could
+/// hide an overlapping match in the next row.
+fn literal_prefilter(lits: &[Vec<u8>], ci: bool) -> Option<Regex> {
+    if lits.is_empty()
+        || lits
+            .iter()
+            .any(|l| l.is_empty() || l.iter().any(|b| matches!(b, b'"' | b'\n' | b'\r')))
+    {
+        return None;
+    }
+    let alts: Vec<String> = lits
+        .iter()
+        .map(|l| regex::escape(&String::from_utf8_lossy(l)))
+        .collect();
+    RegexBuilder::new(&alts.join("|"))
+        .case_insensitive(ci)
+        .unicode(true)
+        .build()
+        .ok()
+}
+
+/// Prefilter for a user regex: every match starts with one of the literal
+/// prefixes `regex-syntax` extracts (case variants included), so a cell can
+/// only match when its raw bytes contain one of them. None when the prefix
+/// set is unbounded or can be empty (e.g. `.*x`, `a?`).
+fn regex_prefilter(pattern: &str, ci: bool) -> Option<Regex> {
+    use regex_syntax::hir::literal::{ExtractKind, Extractor};
+    let hir = regex_syntax::ParserBuilder::new()
+        .case_insensitive(ci)
+        .build()
+        .parse(pattern)
+        .ok()?;
+    let mut ex = Extractor::new();
+    ex.kind(ExtractKind::Prefix);
+    let seq = ex.extract(&hir);
+    let lits: Vec<Vec<u8>> = seq
+        .literals()?
+        .iter()
+        .map(|l| l.as_bytes().to_vec())
+        .collect();
+    // Case variants are already in the set: match them exactly.
+    literal_prefilter(&lits, false)
 }
 
 const SCAN_BLOCK: u64 = 32_768;
@@ -754,4 +783,24 @@ pub fn value_counts(
             .map(|(v, b)| (v.clone(), within.map_or(b.len(), |w| b.intersection_len(w))))
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regex_prefilter_engages_only_when_safe() {
+        assert!(regex_prefilter("-enc\\s+[A-Za-z0-9+/=]{40,}", false).is_some());
+        assert!(regex_prefilter("id-1[0-9]+", false).is_some());
+        let ci = regex_prefilter("(?i)mimikatz", false).unwrap();
+        assert!(ci.is_match(b"x MimiKatz.exe"));
+        assert!(regex_prefilter("(?i)mimikatz", true).is_some());
+        // Unbounded or possibly empty prefixes: no prefilter.
+        assert!(regex_prefilter(".*x", false).is_none());
+        assert!(regex_prefilter("a?", false).is_none());
+        assert!(regex_prefilter("^$", false).is_none());
+        // A quote in the literal may be spelled "" in the file.
+        assert!(regex_prefilter("q\"t", false).is_none());
+    }
 }
