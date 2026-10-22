@@ -162,10 +162,10 @@ pub fn scan_chunk(t: &Tables, chunk: &[u8]) -> ChunkScan {
         *v = t.packed[(*v as usize) << 2 | c as usize];
         *fed = i + 1;
     };
-    let mut words = chunk.chunks_exact(8);
+    let (words, rest) = chunk.as_chunks::<8>();
     let mut base = 0usize;
-    for w in &mut words {
-        let w = u64::from_le_bytes(w.try_into().unwrap_or([0; 8]));
+    for w in words {
+        let w = u64::from_le_bytes(*w);
         let mut m = eq_mask(w, b'\n') | eq_mask(w, t.delim) | eq_mask(w, t.quote);
         while m != 0 {
             let j = (m.trailing_zeros() / 8) as usize;
@@ -174,7 +174,7 @@ pub fn scan_chunk(t: &Tables, chunk: &[u8]) -> ChunkScan {
         }
         base += 8;
     }
-    for (j, &b) in words.remainder().iter().enumerate() {
+    for (j, &b) in rest.iter().enumerate() {
         if b == b'\n' || b == t.delim || b == t.quote {
             special(base + j, &mut v, &mut fed, &mut out);
         }
@@ -249,10 +249,10 @@ pub fn split_row(t: &Tables, row: &[u8], out: &mut Vec<Span>) -> usize {
         }
         *state = step(*state, c);
     };
-    let mut words = row.chunks_exact(8);
+    let (words, rest) = row.as_chunks::<8>();
     let mut base = 0usize;
-    for w in &mut words {
-        let w = u64::from_le_bytes(w.try_into().unwrap_or([0; 8]));
+    for w in words {
+        let w = u64::from_le_bytes(*w);
         let mut m = eq_mask(w, t.delim) | eq_mask(w, t.quote);
         while m != 0 {
             special(
@@ -264,7 +264,7 @@ pub fn split_row(t: &Tables, row: &[u8], out: &mut Vec<Span>) -> usize {
         }
         base += 8;
     }
-    for (j, &b) in words.remainder().iter().enumerate() {
+    for (j, &b) in rest.iter().enumerate() {
         if b == t.delim || b == t.quote {
             special(base + j, &mut state, &mut fed);
         }

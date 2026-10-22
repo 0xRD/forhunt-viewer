@@ -1,3 +1,5 @@
 [toolchain]
-channel = "stable"
+# Pinned so local and CI clippy agree (new stable lints broke CI once);
+# bump deliberately. eframe 0.37 needs >= 1.95.
+channel = "1.97.0"
 components = ["rustfmt", "clippy"]
