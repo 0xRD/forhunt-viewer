@@ -172,3 +172,23 @@ fn broken_file_does_not_crash() {
     h.step();
     assert!(h.state().tabs[0].load_error.is_none());
 }
+
+/// Typing into the global search box and a filter-row box changes the view.
+#[test]
+fn typing_in_search_and_filter_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    h.get_by_label("Search").focus();
+    h.step();
+    h.get_by_label("Search").type_text("msg 99");
+    h.step();
+    assert_eq!(h.state().tabs[0].search, "msg 99");
+    // Filter row: the User column's box (accessible label "filter User").
+    h.get_by_label("filter User").focus();
+    h.step();
+    h.get_by_label("filter User").type_text("jdoe");
+    h.step();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 250);
+}

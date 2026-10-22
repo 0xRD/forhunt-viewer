@@ -82,6 +82,9 @@ pub struct Tab {
     view_gen: u64,
     pub job: Option<Job>,
     pending: bool,
+    /// Last edit of a filter / the search text (queries wait for a pause).
+    changed_at: Instant,
+    search_seen: String,
     pub last_ms: Option<f64>,
     pub status: Option<String>,
     /// File columns in display order (hidden ones are absent).
@@ -154,6 +157,8 @@ impl Tab {
             view_gen: 0,
             job: None,
             pending: false,
+            changed_at: Instant::now(),
+            search_seen: String::new(),
             last_ms: None,
             status: None,
             order: (0..ncols).collect(),
@@ -241,6 +246,7 @@ impl Tab {
     /// Re-runs the query (after any filter/sort/tag change).
     pub fn requery(&mut self) {
         self.pending = true;
+        self.changed_at = Instant::now();
     }
 
     fn spawn<F>(&mut self, kind: JobKind, query: Option<Query>, f: F)
@@ -370,7 +376,12 @@ impl Tab {
                                 ms.unwrap_or(0.0) / 1e3
                             ));
                         }
-                        Err(e) if e == "cancelled" => self.status = Some("cancelled".into()),
+                        // Superseded by newer input: nothing to report.
+                        Err(e) if e == "cancelled" => {
+                            if !self.pending && self.hits_for == self.search {
+                                self.status = Some("cancelled".into());
+                            }
+                        }
                         Err(e) => self.status = Some(format!("error: {e}")),
                     }
                 }
@@ -378,7 +389,23 @@ impl Tab {
                 Err(_) => {}
             }
         }
-        if self.ready() && self.job.is_none() {
+        // Typing: wait for a pause, and stop work the new input supersedes.
+        if self.search != self.search_seen {
+            self.search_seen = self.search.clone();
+            self.changed_at = Instant::now();
+        }
+        let settled = self.changed_at.elapsed() >= std::time::Duration::from_millis(250);
+        if let Some(job) = &self.job {
+            let superseded = match job.kind {
+                JobKind::Query => self.pending,
+                JobKind::Search => self.hits_for != self.search,
+                JobKind::Export(_) => false,
+            };
+            if superseded && !self.table.progress.cancelled() {
+                self.table.progress.cancel();
+            }
+        }
+        if self.ready() && self.job.is_none() && settled {
             if self.pending {
                 self.pending = false;
                 let q = self.query();

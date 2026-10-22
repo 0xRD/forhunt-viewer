@@ -396,12 +396,14 @@ impl App {
             return;
         };
         ui.horizontal(|ui| {
-            ui.label("Search");
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut t.search)
-                    .hint_text("any column (Ctrl+F)")
-                    .desired_width(260.0),
-            );
+            let lbl = ui.label("Search");
+            let r = ui
+                .add(
+                    egui::TextEdit::singleline(&mut t.search)
+                        .hint_text("any column (Ctrl+F)")
+                        .desired_width(260.0),
+                )
+                .labelled_by(lbl.id);
             if focus {
                 r.request_focus();
             }
@@ -488,8 +490,13 @@ impl App {
         // Filter chips.
         let mut remove: Option<(usize, Option<usize>)> = None;
         let has_chips = t.filters.iter().any(ColFilter::is_active) || !t.sort.is_empty();
-        if has_chips {
-            ui.horizontal_wrapped(|ui| {
+        // Always one line (even empty) so the grid does not jump when the
+        // first filter or sort appears.
+        ui.horizontal_wrapped(|ui| {
+            if !has_chips {
+                ui.label(RichText::new("no filter, file order").weak());
+            }
+            {
                 for (c, f) in t.filters.iter().enumerate() {
                     let name = &t.table.columns[c];
                     if !f.quick.is_empty()
@@ -529,8 +536,8 @@ impl App {
                         .collect();
                     ui.label(RichText::new(format!("sorted by {}", s.join(", "))).weak());
                 }
-            });
-        }
+            }
+        });
         if let Some((c, i)) = remove {
             match i {
                 None => t.filters[c].quick.clear(),
@@ -715,10 +722,10 @@ impl App {
         let mut header_action: Option<HeaderAction> = None;
         let mut cell_action: Option<CellAction> = None;
         let filters: Vec<ColFilter> = t.filters.clone();
+        let col_names = t.table.columns.clone();
         let order = t.order.clone();
         let file_col = |dc: usize| dc.checked_sub(DC_FIRST).and_then(|i| order.get(i).copied());
         let has_forhunt = forhunt_col(t).is_some();
-        let col_names = t.table.columns.clone();
         let resp = {
             let mut filter_cell = |ui: &mut Ui, dc: usize, rect: egui::Rect| {
                 let Some(c) = file_col(dc) else { return };
@@ -732,9 +739,13 @@ impl App {
                     te,
                     egui::TextEdit::singleline(&mut q)
                         .hint_text("contains…")
-                        .font(egui::TextStyle::Small)
+                        .margin(egui::vec2(4.0, 2.0))
                         .interactive(ready),
                 );
+                // Screen readers (and UI tests) see "filter <column>".
+                let label = format!("filter {}", col_names[c]);
+                ui.ctx()
+                    .accesskit_node_builder(r.id, |n| n.set_label(label));
                 if r.changed() {
                     quick_edits.push((c, q));
                 }
@@ -1581,7 +1592,8 @@ impl eframe::App for App {
             running |= t.poll(&tz);
         }
         if running {
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            // Progress refresh only: background work does not need 60 fps.
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
         self.shortcuts(&ctx);
         let title = match self.tab_ref() {
