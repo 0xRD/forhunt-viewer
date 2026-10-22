@@ -72,6 +72,8 @@ pub struct Rows {
     cells: Vec<String>,
     /// Number of fields each row really has (ragged rows differ from ncols).
     pub nfields: Vec<u32>,
+    /// Data row of each position.
+    ids: Vec<u32>,
     raw: Vec<u8>,
     spans: Vec<Span>,
     tmp: Vec<u8>,
@@ -86,13 +88,23 @@ impl Rows {
         self.nfields.is_empty()
     }
 
-    /// Cell of display row `row` (absolute data row number).
+    /// Data row shown at position `k` of this batch.
+    pub fn id(&self, k: usize) -> Option<u32> {
+        self.ids.get(k).copied()
+    }
+
+    /// Cell at display position `row` (`first` + k).
     pub fn cell(&self, row: u64, col: usize) -> &str {
         let k = (row.wrapping_sub(self.first)) as usize;
         self.cells
             .get(k * self.ncols + col)
             .map(String::as_str)
             .unwrap_or("")
+    }
+
+    pub fn cell_mut(&mut self, row: u64, col: usize) -> Option<&mut String> {
+        let k = (row.wrapping_sub(self.first)) as usize;
+        self.cells.get_mut(k * self.ncols + col)
     }
 
     pub fn contains(&self, row: u64) -> bool {
@@ -529,6 +541,7 @@ impl Table {
         out.first = range.start;
         out.ncols = ncols;
         out.nfields.clear();
+        out.ids.clear();
         let ix = self.index();
         let h = self.header_rows();
         let avail = ix.len().saturating_sub(h);
@@ -552,6 +565,7 @@ impl Table {
             tmp,
             cells,
             nfields,
+            ids,
             ..
         } = out;
         let bytes = src.read(first..last, raw)?;
@@ -560,11 +574,61 @@ impl Table {
             let row = trim_eol(&bytes[(r.start - first) as usize..(r.end - first) as usize]);
             let nf = split_row(&self.tables, row, spans);
             nfields.push(nf as u32);
+            ids.push((range.start + k as u64) as u32);
             for c in 0..ncols {
                 let cell = &mut cells[k * ncols + c];
                 cell.clear();
                 if let Some(s) = spans.get(c) {
                     cell.push_str(&decode_field(row, s, self.dialect.quote, tmp));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Decodes the given data rows (any order) into `out`, at display
+    /// positions `first..first + rows.len()`.
+    pub fn read_row_list(&self, first: u64, rows: &[u32], out: &mut Rows) -> Result<()> {
+        let ncols = self.columns.len();
+        out.first = first;
+        out.ncols = ncols;
+        out.nfields.clear();
+        out.ids.clear();
+        let n = rows.len();
+        if out.cells.len() < n * ncols {
+            out.cells.resize(n * ncols, String::new());
+        }
+        out.cells.truncate(n * ncols);
+        let ix = self.index();
+        let h = self.header_rows();
+        let avail = ix.len().saturating_sub(h);
+        let src = self.source()?;
+        let Rows {
+            raw,
+            spans,
+            tmp,
+            cells,
+            nfields,
+            ids,
+            ..
+        } = out;
+        for (k, &r) in rows.iter().enumerate() {
+            ids.push(r);
+            if r as u64 >= avail {
+                nfields.push(0);
+                for c in 0..ncols {
+                    cells[k * ncols + c].clear();
+                }
+                continue;
+            }
+            let bytes = trim_eol(src.read(ix.range(r as u64 + h), raw)?);
+            let nf = split_row(&self.tables, bytes, spans);
+            nfields.push(nf as u32);
+            for c in 0..ncols {
+                let cell = &mut cells[k * ncols + c];
+                cell.clear();
+                if let Some(s) = spans.get(c) {
+                    cell.push_str(&decode_field(bytes, s, self.dialect.quote, tmp));
                 }
             }
         }

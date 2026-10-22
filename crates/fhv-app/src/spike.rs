@@ -167,6 +167,12 @@ impl eframe::App for Spike {
                 &mut self.grid,
                 &mut self.src,
                 &self.style,
+                "",
+                grid::Callbacks {
+                    filter_cell: &mut |_, _, _| {},
+                    header_menu: &mut |_, _| {},
+                    cell_menu: &mut |_, _, _| {},
+                },
             );
         });
         if self.bench.is_some() && self.frame > 10 {

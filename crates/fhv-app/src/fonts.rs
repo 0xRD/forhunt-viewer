@@ -26,4 +26,9 @@ pub fn install(ctx: &Context) {
         .families
         .insert(FontFamily::Monospace, vec!["jbmono".into(), "inter".into()]);
     ctx.set_fonts(fonts);
+    // Data can hold any character: draw a box rather than fail. (Tests keep
+    // kittest's panic policy so missing glyphs in our own UI are caught.)
+    if !cfg!(test) {
+        ctx.set_missing_glyph_policy(eframe::egui::epaint::text::MissingGlyphPolicy::Tofu);
+    }
 }

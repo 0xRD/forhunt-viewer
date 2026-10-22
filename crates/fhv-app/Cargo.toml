@@ -14,7 +14,16 @@ path = "src/main.rs"
 [dependencies]
 fhv-engine.workspace = true
 anyhow.workspace = true
-eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland", "clipboard", "accesskit"] }
+roaring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland", "clipboard", "accesskit", "system_fonts"] }
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-bundle-platform", "tzdb-zoneinfo"] }
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["eframe"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

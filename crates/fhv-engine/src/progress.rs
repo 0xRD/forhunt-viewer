@@ -30,6 +30,11 @@ impl Progress {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
+    /// Clears a cancellation (before starting the next job).
+    pub fn reset_cancel(&self) {
+        self.cancel.store(false, Ordering::Relaxed);
+    }
+
     pub fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }

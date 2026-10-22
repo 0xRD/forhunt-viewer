@@ -90,3 +90,34 @@ fn corrupt_cache_is_rebuilt() {
     assert!(!t.from_cache.load(Ordering::Relaxed));
     assert_eq!(t.row_count(), 2);
 }
+
+#[test]
+fn export_roundtrip() {
+    use fhv_engine::export::{Format, export};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.csv");
+    std::fs::write(
+        &path,
+        "a;b;c\n1;\"x;y\";z\n2;\"q\"\"t\";w\n3;\"multi\nline\";v\n",
+    )
+    .unwrap();
+    let t = open(&path, &dir.path().join("cache"));
+    let mut out = Vec::new();
+    export(&t, &[2, 0], &[1, 0], Format::Csv, &mut out).unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "b,a\n\"multi\nline\",3\nx;y,1\n"
+    );
+    let mut out = Vec::new();
+    export(&t, &[0, 1, 2], &[1, 0], Format::Csv, &mut out).unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "b,a\nx;y,1\n\"q\"\"t\",2\n\"multi\nline\",3\n"
+    );
+    let mut out = Vec::new();
+    export(&t, &[1], &[0, 1], Format::Jsonl, &mut out).unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "{\"a\":\"2\",\"b\":\"q\\\"t\"}\n"
+    );
+}
