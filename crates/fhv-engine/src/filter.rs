@@ -471,6 +471,17 @@ impl Engine {
         b
     }
 
+    /// Compiles every predicate of `expr` (bad regexes are reported even
+    /// when an earlier AND term already matches nothing).
+    pub fn validate(&self, expr: &Expr) -> Result<()> {
+        match expr {
+            Expr::And(xs) | Expr::Or(xs) => xs.iter().try_for_each(|x| self.validate(x)),
+            Expr::Not(x) => self.validate(x),
+            Expr::Pred(p) => Compiled::new(&p.op, p.case_sensitive, Kind::Text).map(|_| ()),
+            Expr::Rows(_) => Ok(()),
+        }
+    }
+
     /// Rows matching `expr`.
     pub fn eval(&self, expr: &Expr) -> Result<RoaringBitmap> {
         Ok(match expr {

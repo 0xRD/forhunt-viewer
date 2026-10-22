@@ -77,7 +77,10 @@ impl View {
 pub fn run(engine: &Engine, q: &Query) -> Result<View> {
     let n = engine.table().row_count();
     let rows = match &q.filter {
-        Some(f) => engine.eval(f)?,
+        Some(f) => {
+            engine.validate(f)?;
+            engine.eval(f)?
+        }
         None => {
             let mut b = RoaringBitmap::new();
             b.insert_range(0..n as u32);

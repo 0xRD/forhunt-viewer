@@ -82,3 +82,14 @@ Legend: **verified** = reproduced by running; **by reading** = reasoning from co
 - `cargo tree`: no unexpected licences; fonts excluded from egui defaults as documented.
 
 Build artefacts note: my scratch UI tests were compiled with `CARGO_TARGET_DIR` pointing at the repo's `target/` (ignored by git); no tracked file changed.
+
+## Resolution (main agent, 2026-10-22)
+
+| Findings | Status |
+|---|---|
+| R-001, R-002, R-003, R-004, R-005 (must-fix) | fixed; regression tests for R-001/R-002/R-004 (ui_tests.rs); R-005: parallel blocks capped at 8 MiB (table.rs split_blocks) |
+| R-006, R-007, R-008, R-009, R-010, R-011, R-012, R-013, R-014, R-015, R-016, R-017, R-018, R-019, R-021, R-022, R-023 | fixed (see commits "Review fixes"); R-013 covered by the filter proptest fixture (`"ab"c` cells); R-018: method added to NSObject instead of replacing winit's delegate (D-026), still unverified on a Mac (B-004) |
+| R-020 | partly: appimagetool hash printed in the release log; still unpinned (D-025) |
+| R-024, R-025, R-026, R-027, R-031, R-032, R-034, R-035, R-036, R-037, R-038, R-040, R-041 | fixed |
+| R-028 (highlight folding), R-030 (lossy duplicate dictionary values), R-039 (more before/after benchmarks) | not fixed for v0.1.0 (cosmetic / documentation) |
+| R-029 (CR-only line endings), R-033 (cache key sampling) | documented in README "Limits" / "Forensically sound" |

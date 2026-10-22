@@ -330,8 +330,15 @@ impl Tab {
             };
             let f = std::fs::File::create(&p).map_err(|e| format!("{}: {e}", p.display()))?;
             let mut w = std::io::BufWriter::with_capacity(4 << 20, f);
-            let n = fhv_engine::export::export(&t, &rows, &cols, fmt, &mut w)
-                .map_err(|e| e.to_string())?;
+            let n = match fhv_engine::export::export(&t, &rows, &cols, fmt, &mut w) {
+                Ok(n) => n,
+                Err(e) => {
+                    // No half-written export left behind (cancel or error).
+                    drop(w);
+                    let _ = std::fs::remove_file(&p);
+                    return Err(e.to_string());
+                }
+            };
             Ok(JobResult::Exported(n))
         });
     }
