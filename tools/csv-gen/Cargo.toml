@@ -1,0 +1,16 @@
+[package]
+name = "csv-gen"
+description = "Seeded synthetic CSV generator for forhunt-viewer tests and benchmarks"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+rayon.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "fhv-app"
+description = "forhunt-viewer: a fast timeline / CSV viewer for forensic analysts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "forhunt-viewer"
+path = "src/main.rs"
+
+[dependencies]
+fhv-engine.workspace = true
+
+[lints]
+workspace = true

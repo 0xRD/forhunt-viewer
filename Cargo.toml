@@ -1,0 +1,55 @@
+[workspace]
+resolver = "3"
+members = ["crates/fhv-engine", "crates/fhv-app", "tools/csv-gen"]
+default-members = ["crates/fhv-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/0xRD/forhunt-viewer"
+homepage = "https://github.com/0xRD/forhunt-viewer"
+authors = ["0xRD"]
+
+[workspace.dependencies]
+fhv-engine = { path = "crates/fhv-engine", version = "0.1.0" }
+anyhow = "1"
+thiserror = "2"
+blake3 = "1"
+clap = { version = "4", features = ["derive", "wrap_help"] }
+crossbeam-channel = "0.5"
+memchr = "2"
+memmap2 = "0.9"
+rayon = "1"
+regex = "1"
+roaring = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+proptest = "1"
+criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+# Unwind, not abort: a panic in a worker (bug on malformed input) is caught,
+# reported in the UI, and does not take the analyst's other tabs down.
+panic = "unwind"
+strip = true
+
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = "line-tables-only"
+
+# Fast builds for tests that need optimized engine code.
+[profile.test]
+opt-level = 1

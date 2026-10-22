@@ -1,0 +1,28 @@
+[package]
+name = "fhv-engine"
+description = "Headless engine of forhunt-viewer: CSV indexing, column indexes, filters, sort, export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+blake3.workspace = true
+memchr.workspace = true
+memmap2.workspace = true
+rayon.workspace = true
+regex.workspace = true
+roaring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+csv-gen = { path = "../../tools/csv-gen" }
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
