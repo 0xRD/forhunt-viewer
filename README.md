@@ -26,7 +26,7 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   timeline. The CSV is cached (not written next to the evidence), so
   reopening is instant; File > *Export rows…* saves it, or a filtered part.
   The forhunt evidence path is set for you, so *Copy `forhunt show`
-  command* works straight away. 56,930 events (67 MB, 13 logs) take 0.1 s.
+  command* works straight away. 56,930 events (67 MB, 12 logs) take 0.1 s.
 - **Instant open.** The first rows show in well under a second, while a
   parallel, quote-aware pass indexes the file in the background. The index
   is cached, so reopening a 5 GB file takes under a second.
@@ -38,7 +38,8 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
 - **Filters.**
   - Per-column filter row ("contains").
   - Condition editor: equals, not equals, contains, not contains,
-    begins/ends with, blank, not blank, regex, `>` `>=` `<` `<=`, between
+    begins/ends with, blank, not blank, in list / not in list (one value
+    per line, e.g. a pasted IOC list), regex, `>` `>=` `<` `<=`, between
     (numbers and dates; `<=` and the end of `between` include the whole
     day, minute or second written, so `between 2024-03-01 and 2024-03-01`
     is that day).
@@ -68,8 +69,12 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   - Encodings: UTF-8 (with or without BOM), UTF-16LE/BE, Windows-1252.
   - Delimiters `,` `;` tab `|`, auto-detected.
 - **Display time zone.** Times are converted for display only; the data
-  stays as in the file. Date filters compare with the file's values (UTC
-  for forensic tools), not the converted display.
+  stays as in the file. In date filters (`>`, `<`, between), a time typed
+  without an offset means the display zone, like the times shown (a day
+  is 23 or 25 hours across a DST change); `Z` or `+02:00` is taken as
+  written. Text matching on time columns (filter row, contains, global
+  search) matches the file's values (UTC for forensic tools): the filter
+  chip and the search box say so in orange when the zone is not UTC.
 - **Dark and light themes**, keyboard-friendly.
 - **forhunt integration.** When a `ForhuntId` column is present:
   - copy `forhunt show <id> -p <evidence>` from a row's context menu;
