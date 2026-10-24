@@ -21,6 +21,7 @@
 //! all of this and walk the precomputed order.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use rayon::prelude::*;
 use roaring::RoaringBitmap;
@@ -65,6 +66,18 @@ fn i64_key(v: i64) -> u64 {
 
 /// Rows of `rows` in sorted order.
 pub fn sort(table: &Table, rows: &RoaringBitmap, keys: &[SortKey]) -> Result<Vec<u32>> {
+    sort_with(table, rows, keys, &HashMap::new())
+}
+
+/// [`sort`] with column kinds overridden by the analyst (e.g. the day/month
+/// order of a date column): such columns are parsed with that kind instead
+/// of using the precomputed time index or dictionary order.
+pub fn sort_with(
+    table: &Table,
+    rows: &RoaringBitmap,
+    keys: &[SortKey],
+    kinds: &HashMap<usize, Kind>,
+) -> Result<Vec<u32>> {
     if keys.is_empty() || rows.len() <= 1 {
         return Ok(rows.iter().collect());
     }
@@ -74,12 +87,13 @@ pub fn sort(table: &Table, rows: &RoaringBitmap, keys: &[SortKey]) -> Result<Vec
     }
     let cols = table.column_index();
     if keys.len() == 1
+        && !kinds.contains_key(&keys[0].col)
         && let Some(ci) = &cols
         && let Some(v) = fast_single(ci, rows, keys[0])
     {
         return Ok(v);
     }
-    general(table, cols.as_deref(), rows, keys)
+    general(table, cols.as_deref(), rows, keys, kinds)
 }
 
 fn fast_single(ci: &Columns, rows: &RoaringBitmap, key: SortKey) -> Option<Vec<u32>> {
@@ -200,11 +214,19 @@ fn general(
     cols: Option<&Columns>,
     rows: &RoaringBitmap,
     keys: &[SortKey],
+    overrides: &HashMap<usize, Kind>,
 ) -> Result<Vec<u32>> {
     let n_all = table.row_count() as usize;
     let kinds: Vec<PartKind> = keys
         .iter()
         .map(|key| {
+            if let Some(k) = overrides.get(&key.col) {
+                return match k {
+                    Kind::Time(o) => PartKind::ParseTime(*o),
+                    Kind::Number => PartKind::Number,
+                    Kind::Text => PartKind::Text,
+                };
+            }
             let c = cols.map(|ci| &ci.cols[key.col]);
             match c {
                 Some(c) if c.time.is_some() => PartKind::Ticks,

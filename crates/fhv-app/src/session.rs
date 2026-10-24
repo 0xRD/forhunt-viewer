@@ -29,6 +29,9 @@ pub struct Session {
     #[serde(default)]
     pub bad_only: bool,
     pub tags: Vec<(u32, String)>,
+    /// Day/month order set on date columns (absent in 0.2.x sessions).
+    #[serde(default)]
+    pub date_orders: Vec<(String, fhv_engine::time::Order)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -78,6 +81,15 @@ pub fn capture(tab: &Tab) -> Session {
         tagged_only: tab.tagged_only,
         bad_only: tab.bad_only,
         tags: tab.tags.iter().map(|(r, n)| (*r, n.clone())).collect(),
+        date_orders: tab
+            .engine
+            .kind_overrides()
+            .into_iter()
+            .filter_map(|(c, k)| match k {
+                fhv_engine::columns::Kind::Time(o) => Some((name(c), o)),
+                _ => None,
+            })
+            .collect(),
     }
 }
 
@@ -136,6 +148,17 @@ pub fn apply(tab: &mut Tab, s: &Session) -> Vec<String> {
     tab.search_filter = s.search_filter;
     tab.tagged_only = s.tagged_only;
     tab.bad_only = s.bad_only;
+    for c in 0..tab.table.columns.len() {
+        if tab.engine.kind_override(c).is_some() {
+            tab.set_date_order(c, None);
+        }
+    }
+    for (n, o) in &s.date_orders {
+        match tab.table.columns.iter().position(|c| c == n) {
+            Some(c) => tab.set_date_order(c, Some(*o)),
+            None => warn.push(format!("column {n} not in this file")),
+        }
+    }
     tab.requery();
     warn
 }

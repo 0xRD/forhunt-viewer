@@ -101,7 +101,9 @@ pub enum JobKind {
 }
 
 pub enum JobResult {
-    View(View),
+    /// The view, and the (blank, unparsable) cell counts of the columns
+    /// with an active range condition (rows those conditions exclude).
+    View(View, Vec<(usize, (u64, u64))>),
     Hits(RoaringBitmap),
     Exported(u64),
     Text(String, u64),
@@ -156,6 +158,9 @@ pub struct Tab {
     bad: Option<Arc<RoaringBitmap>>,
     /// Search hits within the current view (recomputed when either changes).
     pub hits_in_view: Option<u64>,
+    /// Per column with an active range condition: (blank, unparsable)
+    /// cells, which that condition excludes (shown on its chip).
+    pub excluded: HashMap<usize, (u64, u64)>,
     /// Texts of the # column for the prepared rows.
     nums: Vec<String>,
     nums_first: u64,
@@ -252,6 +257,7 @@ impl Tab {
             clipboard: None,
             bad: None,
             hits_in_view: None,
+            excluded: HashMap::new(),
         })
     }
 
@@ -302,6 +308,36 @@ impl Tab {
         b
     }
 
+    /// Kind of file column `c` as filters, sorts and display use it.
+    pub fn kind(&self, c: usize) -> Kind {
+        self.engine.kind(c)
+    }
+
+    /// Sets the day/month order of the dates of column `c` (None: as
+    /// detected). Filters, sorts and display follow it.
+    pub fn set_date_order(&mut self, c: usize, order: Option<fhv_engine::time::Order>) {
+        self.engine.set_kind(c, order.map(Kind::Time));
+        self.rows_key = None;
+        // Same query, different meaning: run it again.
+        self.last_query = None;
+        self.requery();
+    }
+
+    /// Time / number columns with a range condition.
+    fn range_columns(&self) -> Vec<usize> {
+        (0..self.filters.len())
+            .filter(|&c| {
+                !matches!(self.kind(c), Kind::Text)
+                    && self.filters[c].conds.iter().any(|o| {
+                        matches!(
+                            o,
+                            Op::Gt(_) | Op::Ge(_) | Op::Lt(_) | Op::Le(_) | Op::Between(..)
+                        )
+                    })
+            })
+            .collect()
+    }
+
     pub fn tag_set(&self) -> RoaringBitmap {
         self.tags.keys().copied().collect()
     }
@@ -309,10 +345,9 @@ impl Tab {
     /// The filter expression of the current UI state (None = all rows).
     pub fn expr(&self) -> Option<Expr> {
         let mut all = Vec::new();
-        let cols = self.table.column_index();
         for (c, f) in self.filters.iter().enumerate() {
-            let time_order = match cols.as_ref().map(|ci| ci.cols[c].kind) {
-                Some(Kind::Time(o)) => Some(o),
+            let time_order = match self.kind(c) {
+                Kind::Time(o) => Some(o),
                 _ => None,
             };
             let pred = |op: Op| {
@@ -561,7 +596,8 @@ impl Tab {
                         .as_ref()
                         .map(|j| j.started.elapsed().as_secs_f64() * 1e3);
                     match r {
-                        Ok(JobResult::View(v)) => {
+                        Ok(JobResult::View(v, counts)) => {
+                            self.excluded = counts.into_iter().collect();
                             let sel_row = self.grid.selected.and_then(|p| self.view.row_at(p));
                             self.view = v;
                             self.update_hits();
@@ -631,10 +667,14 @@ impl Tab {
                 {
                     let engine = self.engine.clone();
                     let q2 = q.clone();
+                    let ranged = self.range_columns();
                     self.spawn(JobKind::Query, Some(q), move || {
-                        fhv_engine::view::run(&engine, &q2)
-                            .map(JobResult::View)
-                            .map_err(|e| e.to_string())
+                        let v = fhv_engine::view::run(&engine, &q2).map_err(|e| e.to_string())?;
+                        let mut counts = Vec::new();
+                        for c in ranged {
+                            counts.push((c, engine.unparsable(c).map_err(|e| e.to_string())?));
+                        }
+                        Ok(JobResult::View(v, counts))
                     });
                 }
             } else if !self.search.is_empty() && self.hits_for != self.search {
@@ -866,11 +906,9 @@ impl GridSource for TabSource<'_> {
             return;
         }
         // Display time zone for time columns.
-        if !self.tz.is_utc()
-            && let Some(ci) = tab.table.column_index()
-        {
-            for (c, col) in ci.cols.iter().enumerate() {
-                if let Kind::Time(order) = col.kind {
+        if !self.tz.is_utc() && tab.table.column_index().is_some() {
+            for c in 0..tab.table.columns.len() {
+                if let Kind::Time(order) = tab.engine.kind(c) {
                     for p in rows.clone() {
                         if let Some(cell) = tab.rows.cell_mut(p, c)
                             && let Some(v) = self.tz.convert(cell, order)

@@ -777,3 +777,53 @@ fn reopen_with_header_and_delimiter_options() {
     wait(&mut h, |a| a.tabs.len() == 2 && a.tabs[1].ready());
     assert!(!h.state().tabs[1].table.header_guessed);
 }
+
+/// Day-first dates with every day <= 12 read month first unless the
+/// analyst sets the order (header menu); a range condition's chip shows the
+/// cells it leaves out (not dates, blank); sessions keep the order.
+#[test]
+fn date_order_override_and_excluded_cells_on_chips() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("eu.csv");
+    let mut s = String::from("TimeCreated,Seen\n");
+    for i in 0..48u32 {
+        let (d, m) = (12 - i % 12, 3 + (i / 12) % 2);
+        s.push_str(&format!("2025-01-01 00:00:{:02},{d}/{m}/2025\n", i % 60));
+    }
+    s.push_str("2025-01-01 00:01:00,n/a\n2025-01-01 00:01:01,\n2025-01-01 00:01:02,later\n");
+    std::fs::write(&file, s).unwrap();
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    let run = |h: &mut Harness<'static, App>| {
+        let q = h.state().tabs[0].query();
+        wait(h, |a| {
+            let t = &a.tabs[0];
+            t.ready() && t.job.is_none() && t.view_query_for_test() == Some(&q)
+        });
+        h.run_steps(2);
+    };
+    let t = &mut h.state_mut().tabs[0];
+    t.filters[1].conds = vec![Op::Between("2025-03-01".into(), "2025-03-31".into())];
+    t.requery();
+    run(&mut h);
+    // Read month first, "3/3/2025" and "3/4/2025" are the only March
+    // dates (one of each per block of 12): 4 rows instead of 24.
+    assert_eq!(h.state().tabs[0].view.len(), 4);
+    h.get_by_label_contains("[2 cells not dates, 1 blank: excluded]");
+    h.state_mut().tabs[0].set_date_order(1, Some(fhv_engine::time::Order::Dmy));
+    run(&mut h);
+    let t = &h.state().tabs[0];
+    assert_eq!(t.view.len(), 24);
+    assert!(t.view.iter().all(|r| r < 48 && (r / 12) % 2 == 0));
+    // Session: the order comes back.
+    let json = serde_json::to_string(&crate::session::capture(&h.state().tabs[0])).unwrap();
+    let s2: crate::session::Session = serde_json::from_str(&json).unwrap();
+    h.state_mut().tabs[0].set_date_order(1, None);
+    crate::session::apply(&mut h.state_mut().tabs[0], &s2);
+    assert_eq!(
+        h.state().tabs[0].kind(1),
+        fhv_engine::columns::Kind::Time(fhv_engine::time::Order::Dmy)
+    );
+    run(&mut h);
+    assert_eq!(h.state().tabs[0].view.len(), 24);
+}

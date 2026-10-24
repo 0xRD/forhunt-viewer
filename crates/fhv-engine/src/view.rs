@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 use crate::filter::{Engine, Expr};
-use crate::sort::{SortKey, sort};
+use crate::sort::{SortKey, sort_with};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Query {
@@ -90,7 +90,12 @@ pub fn run(engine: &Engine, q: &Query) -> Result<View> {
     let order = if q.sort.is_empty() {
         None
     } else {
-        Some(Arc::new(sort(engine.table(), &rows, &q.sort)?))
+        Some(Arc::new(sort_with(
+            engine.table(),
+            &rows,
+            &q.sort,
+            &engine.kind_overrides(),
+        )?))
     };
     Ok(View {
         rows: Arc::new(rows),

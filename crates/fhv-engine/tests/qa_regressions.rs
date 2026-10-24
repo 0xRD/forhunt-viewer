@@ -422,3 +422,61 @@ fn large_hex_numbers_compare_exactly() {
     .unwrap();
     assert_eq!(two, (0..1200u32).collect::<Vec<_>>(), "multi-key sort");
 }
+
+/// Day-first dates whose days are all <= 12 cannot be told from month-first
+/// ones: the profile assumes month first. The analyst can set the order of
+/// a column; filters (also on the primary time column, whose time index is
+/// then not used), sorts and the unparsable-cell count follow it.
+#[test]
+fn date_order_override_and_unparsable_counts() {
+    // d/M/yyyy, days 1..12 of March and April 2025, out of order, plus
+    // two cells that are not dates and one blank.
+    let mut csv = String::from("TimeCreated,n\n");
+    let mut want = Vec::new();
+    for i in 0..48u32 {
+        let (d, m) = (12 - i % 12, 3 + (i / 12) % 2);
+        csv.push_str(&format!("{d}/{m}/2025 10:00,{i}\n"));
+        want.push((m, d, i));
+    }
+    csv.push_str("n/a,48\n,49\nyesterday,50\n");
+    let fx = open(&csv);
+    let e = &fx.engine;
+    // Undecided order: year-first, or month first for slash dates.
+    assert_eq!(
+        e.kind(0),
+        fhv_engine::columns::Kind::Time(fhv_engine::time::Order::Ymd)
+    );
+    assert_eq!(e.unparsable(0).unwrap(), (1, 2));
+    let between = Op::Between("2025-03-01".into(), "2025-03-31".into());
+    // Month first: "12/3/2025" is 3 December, "3/4/2025" is 4 March...
+    let march: Vec<u32> = want.iter().filter(|w| w.0 == 3).map(|w| w.2).collect();
+    assert_ne!(rows(&fx, 0, between.clone()), march);
+    e.set_kind(
+        0,
+        Some(fhv_engine::columns::Kind::Time(
+            fhv_engine::time::Order::Dmy,
+        )),
+    );
+    assert_eq!(rows(&fx, 0, between.clone()), march);
+    assert_eq!(e.unparsable(0).unwrap(), (1, 2));
+    // Sort follows the override: unparsable first, then chronological.
+    let got = fhv_engine::view::run(
+        e,
+        &fhv_engine::Query {
+            filter: None,
+            sort: vec![fhv_engine::SortKey {
+                col: 0,
+                desc: false,
+            }],
+        },
+    )
+    .unwrap();
+    let mut sorted = want.clone();
+    sorted.sort();
+    let mut expect: Vec<u32> = vec![48, 49, 50];
+    expect.extend(sorted.iter().map(|w| w.2));
+    assert_eq!(got.iter().collect::<Vec<_>>(), expect);
+    // Back to the profiled order.
+    e.set_kind(0, None);
+    assert_ne!(rows(&fx, 0, between), march);
+}

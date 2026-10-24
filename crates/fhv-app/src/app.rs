@@ -768,9 +768,24 @@ impl App {
                             ""
                         };
                         let n = note(Some(op));
+                        let x = if is_text_op(op) || matches!(op, Op::IsBlank | Op::IsNotBlank) {
+                            String::new()
+                        } else {
+                            excluded_note(t, c)
+                        };
+                        let hover = if x.is_empty() {
+                            tip(n)
+                        } else {
+                            "remove. Cells that are blank or cannot be read as this column's \
+                             type cannot be compared and are left out by this condition"
+                                .into()
+                        };
                         if ui
-                            .button(chip_text(format!("{joiner}{name} {}{n}  ×", op_text(op)), n))
-                            .on_hover_text(tip(n))
+                            .button(chip_text(
+                                format!("{joiner}{name} {}{n}{x}  ×", op_text(op)),
+                                if x.is_empty() { n } else { &x },
+                            ))
+                            .on_hover_text(hover)
                             .clicked()
                         {
                             remove = Some((c, Some(i)));
@@ -969,9 +984,9 @@ impl App {
                                         .desired_rows(1)
                                         .desired_width(f32::INFINITY),
                                 );
-                                if let (Some(ci), false) = (&kinds, self.tz.is_utc())
-                                    && let Some(col) = ci.cols.get(i)
-                                    && let fhv_engine::columns::Kind::Time(o) = col.kind
+                                if let (Some(_), false) = (&kinds, self.tz.is_utc())
+                                    && i < t.table.columns.len()
+                                    && let fhv_engine::columns::Kind::Time(o) = t.kind(i)
                                     && let Some(c) = self.tz.convert(v, o)
                                 {
                                     ui.label(
@@ -1045,6 +1060,17 @@ impl App {
         let mut header_action: Option<HeaderAction> = None;
         let mut cell_action: Option<CellAction> = None;
         let filters: Vec<ColFilter> = t.filters.clone();
+        let col_kinds: Vec<fhv_engine::columns::Kind> =
+            (0..t.table.columns.len()).map(|c| t.kind(c)).collect();
+        let col_overrides: std::collections::HashMap<usize, fhv_engine::time::Order> = t
+            .engine
+            .kind_overrides()
+            .into_iter()
+            .filter_map(|(c, k)| match k {
+                fhv_engine::columns::Kind::Time(o) => Some((c, o)),
+                _ => None,
+            })
+            .collect();
         let utc_cols: Vec<bool> = (0..t.table.columns.len())
             .map(|c| utc_text_note(t, c))
             .collect();
@@ -1131,6 +1157,22 @@ impl App {
                 if ui.button("Copy column values (view)").clicked() {
                     header_action = Some(HeaderAction::CopyColumn(c));
                     ui.close();
+                }
+                if !matches!(col_kinds[c], fhv_engine::columns::Kind::Number) {
+                    use fhv_engine::time::Order;
+                    ui.separator();
+                    ui.label("Dates written d/M or M/d (year last):");
+                    let cur = col_overrides.get(&c).copied();
+                    for (label, o) in [
+                        ("as detected", None),
+                        ("day first (31/12/2024)", Some(Order::Dmy)),
+                        ("month first (12/31/2024)", Some(Order::Mdy)),
+                    ] {
+                        if ui.selectable_label(cur == o, label).clicked() {
+                            header_action = Some(HeaderAction::DateOrder(c, o));
+                            ui.close();
+                        }
+                    }
                 }
             };
             let mut cell_menu = |ui: &mut Ui, row: u64, dc: usize| {
@@ -1240,6 +1282,7 @@ impl App {
                 HeaderAction::Hide(c) => t.order.retain(|&x| x != c),
                 HeaderAction::Freeze(n) => t.grid.frozen = n,
                 HeaderAction::CopyColumn(c) => t.start_copy_column(c),
+                HeaderAction::DateOrder(c, o) => t.set_date_order(c, o),
             }
         }
         if let Some(a) = cell_action {
@@ -1873,6 +1916,7 @@ impl App {
 
 enum HeaderAction {
     Sort(usize, bool),
+    DateOrder(usize, Option<fhv_engine::time::Order>),
     Hide(usize),
     Freeze(usize),
     CopyColumn(usize),
@@ -1927,9 +1971,26 @@ const WARN: Color32 = Color32::from_rgb(230, 120, 60);
 /// matching on it sees the file's UTC values (D-038).
 fn utc_text_note(t: &Tab, c: usize) -> bool {
     !t.tz_display().is_utc()
-        && t.table
-            .column_index()
-            .is_some_and(|ci| matches!(ci.cols[c].kind, fhv_engine::columns::Kind::Time(_)))
+        && t.table.column_index().is_some()
+        && matches!(t.kind(c), fhv_engine::columns::Kind::Time(_))
+}
+
+/// Chip note of a range condition on column `c`: the cells it cannot
+/// compare (not dates / numbers, or blank), which it leaves out.
+fn excluded_note(t: &Tab, c: usize) -> String {
+    let Some(&(blank, bad)) = t.excluded.get(&c) else {
+        return String::new();
+    };
+    let what = match t.kind(c) {
+        fhv_engine::columns::Kind::Time(_) => "not dates",
+        _ => "not numbers",
+    };
+    match (bad, blank) {
+        (0, 0) => String::new(),
+        (b, 0) => format!(" [{} cells {what}: excluded]", fmt_n(b)),
+        (0, k) => format!(" [{} blank cells: excluded]", fmt_n(k)),
+        (b, k) => format!(" [{} cells {what}, {} blank: excluded]", fmt_n(b), fmt_n(k)),
+    }
 }
 
 /// Operators that match text (not ranges or blanks).

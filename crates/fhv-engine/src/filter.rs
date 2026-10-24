@@ -585,6 +585,11 @@ const SCAN_BLOCK: u64 = 32_768;
 pub struct Engine {
     table: Arc<Table>,
     cache: Mutex<HashMap<String, Arc<RoaringBitmap>>>,
+    /// Column kinds set by the analyst (e.g. day/month order of a date
+    /// column), overriding the profiled kind.
+    kinds: Mutex<HashMap<usize, Kind>>,
+    /// Blank and unparsable cell counts per (column, kind).
+    unparsable: Mutex<HashMap<(usize, String), (u64, u64)>>,
 }
 
 impl Engine {
@@ -592,11 +597,122 @@ impl Engine {
         Engine {
             table,
             cache: Mutex::new(HashMap::new()),
+            kinds: Mutex::new(HashMap::new()),
+            unparsable: Mutex::new(HashMap::new()),
         }
     }
 
     pub fn table(&self) -> &Arc<Table> {
         &self.table
+    }
+
+    /// Overrides the kind of column `c` (None: back to the profiled kind).
+    /// Cached results are dropped.
+    pub fn set_kind(&self, c: usize, kind: Option<Kind>) {
+        if let Ok(mut k) = self.kinds.lock() {
+            match kind {
+                Some(x) => k.insert(c, x),
+                None => k.remove(&c),
+            };
+        }
+        self.clear_cache();
+    }
+
+    /// Kind set by [`Engine::set_kind`], if any.
+    pub fn kind_override(&self, c: usize) -> Option<Kind> {
+        self.kinds.lock().ok().and_then(|k| k.get(&c).copied())
+    }
+
+    /// All overridden kinds.
+    pub fn kind_overrides(&self) -> HashMap<usize, Kind> {
+        self.kinds.lock().map(|k| k.clone()).unwrap_or_default()
+    }
+
+    /// Kind of column `c` as filters and sorts use it.
+    pub fn kind(&self, c: usize) -> Kind {
+        self.kind_override(c).unwrap_or_else(|| {
+            self.table
+                .column_index()
+                .and_then(|ci| ci.cols.get(c).map(|x| x.kind))
+                .unwrap_or(Kind::Text)
+        })
+    }
+
+    /// Cells of column `c` that a time / number comparison cannot use, and
+    /// that range filters therefore exclude: (blank, not blank but not a
+    /// date-time / number of the column's kind). (0, 0) for text columns.
+    pub fn unparsable(&self, c: usize) -> Result<(u64, u64)> {
+        let kind = self.kind(c);
+        let parses = |v: &[u8]| match kind {
+            Kind::Time(o) => time::parse(v, o).is_some(),
+            Kind::Number => parse_num(v).is_some(),
+            Kind::Text => true,
+        };
+        if kind == Kind::Text || c >= self.table.columns.len() {
+            return Ok((0, 0));
+        }
+        let key = (c, format!("{kind:?}"));
+        if let Some(v) = self
+            .unparsable
+            .lock()
+            .map_err(|_| Error::Poisoned)?
+            .get(&key)
+        {
+            return Ok(*v);
+        }
+        let blank = |v: &[u8]| v.iter().all(u8::is_ascii_whitespace);
+        let mut out = (0u64, 0u64);
+        match self
+            .table
+            .column_index()
+            .and_then(|ci| ci.cols[c].dict.clone())
+        {
+            Some(d) => {
+                for (v, b) in d.values.iter().zip(&d.bitmaps) {
+                    if blank(v.as_bytes()) {
+                        out.0 += b.len();
+                    } else if !parses(v.as_bytes()) {
+                        out.1 += b.len();
+                    }
+                }
+            }
+            None => {
+                let t = self.table.tables();
+                let quote = self.table.dialect.quote;
+                let n = self.table.row_count();
+                self.table.par_blocks(
+                    0..n,
+                    SCAN_BLOCK,
+                    |b| {
+                        let (mut nb, mut nu) = (0u64, 0u64);
+                        let mut tmp = Vec::new();
+                        for k in 0..b.len() {
+                            let row = b.row(k);
+                            let cell = match nth_field(t, row, c) {
+                                Some(s) => field_bytes(row, s, quote, &mut tmp),
+                                None => &[][..],
+                            };
+                            if blank(cell) {
+                                nb += 1;
+                            } else if !parses(cell) {
+                                nu += 1;
+                            }
+                        }
+                        (nb, nu)
+                    },
+                    |_, (nb, nu)| {
+                        out.0 += nb;
+                        out.1 += nu;
+                        Ok(())
+                    },
+                )?;
+            }
+        }
+        self.unparsable
+            .lock()
+            .map_err(|_| Error::Poisoned)?
+            .insert(key, out);
+        Ok(out)
     }
 
     fn all_rows(&self) -> RoaringBitmap {
@@ -615,9 +731,9 @@ impl Engine {
                 // With the column's kind: a time column checks its range
                 // operands (D-036) even when an AND term before it already
                 // matches nothing.
-                let kind = match (&p.target, self.table.column_index()) {
-                    (Target::Column(c), Some(ci)) => ci.cols.get(*c).map_or(Kind::Text, |x| x.kind),
-                    _ => Kind::Text,
+                let kind = match &p.target {
+                    Target::Column(c) => self.kind(*c),
+                    Target::Any => Kind::Text,
                 };
                 Compiled::new(&p.op, p.case_sensitive, kind).map(|_| ())
             }
@@ -657,7 +773,12 @@ impl Engine {
 
     /// Bitmap of one predicate (cached).
     pub fn leaf(&self, p: &Pred) -> Result<Arc<RoaringBitmap>> {
-        let key = serde_json::to_string(p).unwrap_or_default();
+        let mut key = serde_json::to_string(p).unwrap_or_default();
+        if let Target::Column(c) = p.target
+            && let Some(k) = self.kind_override(c)
+        {
+            key.push_str(&format!("{k:?}"));
+        }
         if let Some(b) = self.cache.lock().map_err(|_| Error::Poisoned)?.get(&key) {
             return Ok(b.clone());
         }
@@ -683,13 +804,16 @@ impl Engine {
                 if c >= self.table.columns.len() {
                     return Err(Error::Other(format!("no column {c}")));
                 }
-                let kind = cols.as_ref().map_or(Kind::Text, |ci| ci.cols[c].kind);
+                let kind = self.kind(c);
                 let cp = Compiled::new(&p.op, p.case_sensitive, kind)?;
                 if let Some(ci) = &cols {
                     if let Some(b) = self.via_dict(ci, c, &cp) {
                         return Ok(b);
                     }
-                    if let Some(b) = self.via_time(ci, c, &cp) {
+                    // The time index holds ticks of the profiled kind.
+                    if self.kind_override(c).is_none()
+                        && let Some(b) = self.via_time(ci, c, &cp)
+                    {
                         return Ok(b);
                     }
                 }
@@ -798,10 +922,9 @@ impl Engine {
     fn scan_any(&self, p: &Pred) -> Result<RoaringBitmap> {
         let cp = Compiled::new(&p.op, p.case_sensitive, Kind::Text)?;
         // Each column compares with its own type (time / number ranges).
-        let cols = self.table.column_index();
         let per_col: Vec<Compiled> = (0..self.table.columns.len())
             .map(|c| {
-                let kind = cols.as_ref().map_or(Kind::Text, |ci| ci.cols[c].kind);
+                let kind = self.kind(c);
                 // Any column: an operand that is not a time compares the
                 // time columns as text rather than failing the search.
                 Compiled::new(&p.op, p.case_sensitive, kind)
