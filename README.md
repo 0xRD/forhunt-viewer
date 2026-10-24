@@ -33,10 +33,13 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   - Excel-style value list with counts and search.
   - Filter chips; clear all.
 - **Global search** in every column, with match highlighting and next /
-  previous (F3).
+  previous (F3). Tick *only matches* to hide the rows without the search
+  text.
 - **Sorting.** Multi-column (click, shift-click), deterministic (ties keep
   file order).
-- **Columns.** Show/hide, reorder, resize, freeze the first N.
+- **Columns.** Show/hide, reorder, resize. *Freeze N cols* (toolbar, or
+  right-click a header > *Freeze up to here*) pins the first N columns at
+  the left while you scroll sideways.
 - **Detail pane.** Every field of the selected row, including the extra
   fields of malformed rows. JSON cells (e.g. `Payload`) are pretty-printed.
   Copy cell / row / column.

@@ -477,7 +477,16 @@ impl App {
                 t.grid.selected = Some(p);
                 grid::scroll_to(&mut t.grid, p);
             }
-            if ui.checkbox(&mut t.search_filter, "filter").changed() {
+            let has_search = !t.search.is_empty();
+            if ui
+                .add_enabled(
+                    has_search || t.search_filter,
+                    egui::Checkbox::new(&mut t.search_filter, "only matches"),
+                )
+                .on_hover_text("hide the rows that do not contain the search text")
+                .on_disabled_hover_text("type a search first: this hides the rows without it")
+                .changed()
+            {
                 t.requery();
             }
             ui.separator();
@@ -527,10 +536,16 @@ impl App {
                 t.requery();
             }
             ui.separator();
-            ui.label("Freeze");
+            let tip = "number of columns pinned at the left while scrolling sideways \
+                       (also: right-click a column header > Freeze up to here)";
+            ui.label("Freeze").on_hover_text(tip);
             let max = t.display_count();
-            ui.add(egui::DragValue::new(&mut t.grid.frozen).range(0..=max))
-                .on_hover_text("columns kept at the left when scrolling");
+            ui.add(
+                egui::DragValue::new(&mut t.grid.frozen)
+                    .range(0..=max)
+                    .suffix(" cols"),
+            )
+            .on_hover_text(tip);
         });
         // Filter chips.
         let mut remove: Option<(usize, Option<usize>)> = None;
