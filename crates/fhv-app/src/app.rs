@@ -899,11 +899,41 @@ impl App {
         let dark = self.settings.dark;
         let evidence = self.settings.evidence.clone();
         let Some(t) = self.tabs.get_mut(self.active) else {
-            ui.centered_and_justified(|ui| {
+            // Empty window: what can be opened, and how files combine.
+            ui.vertical_centered(|ui| {
+                ui.add_space((ui.available_height() / 2.0 - 90.0).max(16.0));
                 ui.label(
-                    RichText::new("Drop CSV files here, or File > Open (Ctrl+O)")
+                    RichText::new("Drop files or a folder here, or File > Open (Ctrl+O)")
                         .size(18.0)
                         .weak(),
+                );
+                ui.add_space(14.0);
+                for (what, how) in [
+                    (
+                        "CSV / TSV",
+                        "timelines from forhunt, EvtxECmd, MFTECmd, Hayabusa, plaso...",
+                    ),
+                    (
+                        "Event logs (.evtx)",
+                        "parsed by forhunt, nothing to install",
+                    ),
+                    (
+                        "NTFS $MFT and $J",
+                        "file system timeline, parsed by forhunt",
+                    ),
+                    ("Evidence folder", "every .evtx / $MFT / $J inside it"),
+                ] {
+                    ui.label(RichText::new(format!("{what}: {how}")).size(14.0).weak());
+                }
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new(
+                        "Event logs and NTFS files dropped together are merged into one \
+                         timeline, sorted by time. CSV files open in their own tabs.",
+                    )
+                    .size(13.0)
+                    .italics()
+                    .weak(),
                 );
             });
             return;
