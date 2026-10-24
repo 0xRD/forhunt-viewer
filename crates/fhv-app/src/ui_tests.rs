@@ -665,3 +665,78 @@ fn combined_ui_filters_equal_a_plain_evaluation() {
     wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 1000);
     assert!(h.state().tabs[0].filters.iter().all(|f| !f.is_active()));
 }
+
+/// Display zone Europe/Paris: times typed in a time filter mean what the
+/// analyst sees. Hourly UTC events over the October 2025 DST change
+/// (2025-10-26 is a 25-hour day in Paris) and the March one (23 hours).
+#[test]
+fn time_filters_follow_the_display_zone() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("hours.csv");
+    let mut s = String::from("TimeCreated,n\n");
+    for (day0, hours) in [(1_761_350_400i64, 96), (1_743_206_400, 96)] {
+        // 2025-10-25T00:00Z and 2025-03-29T00:00Z, 4 days each.
+        for h in 0..hours {
+            let t = (day0 + h * 3600) * fhv_engine::time::TICKS_PER_SEC;
+            s.push_str(&format!("{}Z,{h}\n", fhv_engine::time::format(t, 0)));
+        }
+    }
+    std::fs::write(&file, s).unwrap();
+    let cache = dir.path().join("cache");
+    let settings = Settings {
+        tz: "Europe/Paris".into(),
+        ..Settings::default()
+    };
+    let f = file.clone();
+    let mut h = Harness::builder()
+        .with_size([1400.0, 800.0])
+        .build_eframe(move |cc| App::with(cc, vec![f.clone()], settings.clone(), cache.clone()));
+    wait(&mut h, idle);
+    let count = |h: &mut Harness<'static, App>, op: Op| -> u64 {
+        let t = &mut h.state_mut().tabs[0];
+        t.filters[0].conds = vec![op];
+        t.requery();
+        let q = t.query();
+        wait(h, |a| {
+            let t = &a.tabs[0];
+            t.ready() && t.job.is_none() && t.view_query_for_test() == Some(&q)
+        });
+        h.state().tabs[0].view.len()
+    };
+    // Paris 2025-10-26: 2025-10-25T22:00Z .. 2025-10-26T22:59Z = 25 events.
+    assert_eq!(
+        count(
+            &mut h,
+            Op::Between("2025-10-26".into(), "2025-10-26".into())
+        ),
+        25
+    );
+    // Paris 2025-03-30: 23 events.
+    assert_eq!(
+        count(
+            &mut h,
+            Op::Between("2025-03-30".into(), "2025-03-30".into())
+        ),
+        23
+    );
+    // 02:30 happens twice on 2025-10-26: <= keeps both (up to 01:30Z),
+    // >= starts at the first one (00:30Z).
+    let le = count(&mut h, Op::Le("2025-10-26 02:30".into()));
+    assert_eq!(le, 26 + 96, "Oct 25 00:00Z .. Oct 26 01:00Z, plus March");
+    let ge = count(&mut h, Op::Ge("2025-10-26 02:30".into()));
+    assert_eq!(ge, 96 - 25);
+    // An explicit offset is taken as written.
+    assert_eq!(count(&mut h, Op::Lt("2025-10-25T01:00:00Z".into())), 96 + 1);
+    // Text matching on the time column sees UTC file values: the chip and
+    // the search box say so; range chips carry no such note.
+    assert!(
+        h.query_all_by_label_contains("[UTC file values]")
+            .next()
+            .is_none()
+    );
+    h.state_mut().tabs[0].filters[0].quick = "2025-10-26 01".into();
+    h.state_mut().tabs[0].search = "2025".into();
+    h.run_steps(2);
+    h.get_by_label_contains("contains \"2025-10-26 01\" [UTC file values]");
+    h.get_by_label("time columns: UTC file values");
+}

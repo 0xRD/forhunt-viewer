@@ -91,9 +91,10 @@ fn trim(b: &[u8]) -> &[u8] {
 }
 
 /// Parses `HH:mm[:ss[.f]][ AM|PM][offset]` after a date; returns ticks of
-/// the day plus the offset correction, and the unit of the last written
-/// component (a minute, a second, or 10^-k s for k fraction digits).
-fn time_part(c: &mut Cur<'_>, allow_ampm: bool) -> Option<(i64, i64)> {
+/// the day plus the offset correction, the unit of the last written
+/// component (a minute, a second, or 10^-k s for k fraction digits), and
+/// whether an offset (`Z`, `±HH:MM`) was written.
+fn time_part(c: &mut Cur<'_>, allow_ampm: bool) -> Option<(i64, i64, bool)> {
     let h = c.num(1, 2)?;
     if !c.eat(b':') {
         return None;
@@ -155,6 +156,7 @@ fn time_part(c: &mut Cur<'_>, allow_ampm: bool) -> Option<(i64, i64)> {
     let mut ticks = ((h * 3600 + mi * 60 + s.min(59)) as i64) * TICKS_PER_SEC + frac;
     // Offset.
     let save = c.i;
+    let mut zoned = true;
     c.eat(b' ');
     match c.peek() {
         Some(b'Z') | Some(b'z') => {
@@ -171,9 +173,12 @@ fn time_part(c: &mut Cur<'_>, allow_ampm: bool) -> Option<(i64, i64)> {
             let off = ((oh * 3600 + om * 60) as i64) * TICKS_PER_SEC;
             ticks -= if sign == b'+' { off } else { -off };
         }
-        _ => c.i = save,
+        _ => {
+            c.i = save;
+            zoned = false;
+        }
     }
-    Some((ticks, unit))
+    Some((ticks, unit, zoned))
 }
 
 fn date_ticks(y: i64, m: u32, d: u32) -> Option<i64> {
@@ -193,6 +198,13 @@ pub fn parse(b: &[u8], order: Order) -> Option<i64> {
 /// for `HH:mm`, a second for `HH:mm:ss`, 10^-k s for k fraction digits
 /// (1 tick from 7 digits on). `2024-03-01` covers the whole day.
 pub fn parse_span(b: &[u8], order: Order) -> Option<(i64, i64)> {
+    parse_zoned(b, order).map(|(t, span, _)| (t, span))
+}
+
+/// Like [`parse_span`], plus whether the value carries an explicit offset
+/// (`Z`, `+02:00`...). Without one the ticks are the wall-clock time read
+/// as UTC (callers may reinterpret it in another zone).
+pub fn parse_zoned(b: &[u8], order: Order) -> Option<(i64, i64, bool)> {
     const DAY: i64 = 86_400 * TICKS_PER_SEC;
     let b = trim(b);
     if b.len() < 6 {
@@ -211,13 +223,13 @@ pub fn parse_span(b: &[u8], order: Order) -> Option<(i64, i64)> {
         let d = c.num(1, 2)?;
         let day = date_ticks(y, m, d)?;
         if c.done() {
-            return Some((day, DAY));
+            return Some((day, DAY, false));
         }
         if !(c.eat(b'T') || c.eat(b't') || c.eat(b' ')) {
             return None;
         }
-        let (t, unit) = time_part(&mut c, false)?;
-        return c.done().then_some((day + t, unit));
+        let (t, unit, zoned) = time_part(&mut c, false)?;
+        return c.done().then_some((day + t, unit, zoned));
     }
     // Year last: a/b/yyyy or a.b.yyyy
     let a = c.num(1, 2)?;
@@ -237,13 +249,13 @@ pub fn parse_span(b: &[u8], order: Order) -> Option<(i64, i64)> {
     };
     let day = date_ticks(y, m, d)?;
     if c.done() {
-        return Some((day, DAY));
+        return Some((day, DAY, false));
     }
     if !c.eat(b' ') {
         return None;
     }
-    let (t, unit) = time_part(&mut c, true)?;
-    c.done().then_some((day + t, unit))
+    let (t, unit, zoned) = time_part(&mut c, true)?;
+    c.done().then_some((day + t, unit, zoned))
 }
 
 /// Parses any accepted shape; slash dates are taken as US month/day.

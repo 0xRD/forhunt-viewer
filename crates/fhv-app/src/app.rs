@@ -585,6 +585,18 @@ impl App {
                     Some(h) => format!("{h} rows"),
                     None => "…".into(),
                 });
+                let has_time = t.table.column_index().is_some_and(|ci| {
+                    ci.cols
+                        .iter()
+                        .any(|c| matches!(c.kind, fhv_engine::columns::Kind::Time(_)))
+                });
+                if has_time && !t.tz_display().is_utc() {
+                    ui.label(RichText::new("time columns: UTC file values").color(WARN))
+                        .on_hover_text(format!(
+                            "The search matches the values in the file (UTC), not the {} times shown",
+                            t.tz_display().name
+                        ));
+                }
             }
             if ui
                 .button("◀")
@@ -683,13 +695,35 @@ impl App {
             {
                 for (c, f) in t.filters.iter().enumerate() {
                     let name = &t.table.columns[c];
-                    if !f.quick.is_empty()
-                        && ui
-                            .button(format!("{name} contains {:?}  ×", f.quick))
-                            .on_hover_text("remove")
+                    // Text matching on a time column sees the file's UTC
+                    // values, not the converted times on screen (D-038).
+                    let utc = utc_text_note(t, c);
+                    let note = |op: Option<&Op>| -> &'static str {
+                        match op {
+                            _ if !utc => "",
+                            Some(o) if !is_text_op(o) => "",
+                            _ => " [UTC file values]",
+                        }
+                    };
+                    let tip = |extra: &str| -> String {
+                        if extra.is_empty() {
+                            "remove".into()
+                        } else {
+                            format!(
+                                "remove. Matches the UTC values in the file, not the {} times shown",
+                                t.tz_display().name
+                            )
+                        }
+                    };
+                    if !f.quick.is_empty() {
+                        let n = note(None);
+                        if ui
+                            .button(chip_text(format!("{name} contains {:?}{n}  ×", f.quick), n))
+                            .on_hover_text(tip(n))
                             .clicked()
-                    {
-                        remove = Some((c, None));
+                        {
+                            remove = Some((c, None));
+                        }
                     }
                     for (i, op) in f.conds.iter().enumerate() {
                         let joiner = if i > 0 {
@@ -697,21 +731,24 @@ impl App {
                         } else {
                             ""
                         };
+                        let n = note(Some(op));
                         if ui
-                            .button(format!("{joiner}{name} {}  ×", op_text(op)))
-                            .on_hover_text("remove")
+                            .button(chip_text(format!("{joiner}{name} {}{n}  ×", op_text(op)), n))
+                            .on_hover_text(tip(n))
                             .clicked()
                         {
                             remove = Some((c, Some(i)));
                         }
                     }
-                    if let Some(op) = &f.values
-                        && ui
-                            .button(format!("{name} {}  ×", op_text(op)))
-                            .on_hover_text("remove (exact values)")
+                    if let Some(op) = &f.values {
+                        let n = note(Some(op));
+                        if ui
+                            .button(chip_text(format!("{name} {}{n}  ×", op_text(op)), n))
+                            .on_hover_text(format!("{} (exact values)", tip(n)))
                             .clicked()
-                    {
-                        remove = Some((c, Some(usize::MAX)));
+                        {
+                            remove = Some((c, Some(usize::MAX)));
+                        }
                     }
                 }
                 if !t.sort.is_empty() {
@@ -964,6 +1001,9 @@ impl App {
         let mut header_action: Option<HeaderAction> = None;
         let mut cell_action: Option<CellAction> = None;
         let filters: Vec<ColFilter> = t.filters.clone();
+        let utc_cols: Vec<bool> = (0..t.table.columns.len())
+            .map(|c| utc_text_note(t, c))
+            .collect();
         let col_names = t.table.columns.clone();
         let order = t.order.clone();
         let file_col = |dc: usize| dc.checked_sub(DC_FIRST).and_then(|i| order.get(i).copied());
@@ -977,13 +1017,25 @@ impl App {
                     rect.min,
                     egui::pos2(rect.max.x - bw - 2.0, rect.max.y),
                 );
+                let utc = utc_cols.get(c).copied().unwrap_or(false);
                 let r = ui.put(
                     te,
                     egui::TextEdit::singleline(&mut q)
-                        .hint_text("contains…")
+                        .hint_text(if utc {
+                            "contains (UTC)…"
+                        } else {
+                            "contains…"
+                        })
                         .margin(egui::vec2(4.0, 2.0))
                         .interactive(ready),
                 );
+                let r = if utc {
+                    r.on_hover_text(
+                        "matches the UTC values in the file, not the converted times shown",
+                    )
+                } else {
+                    r
+                };
                 // Screen readers (and UI tests) see "filter <column>".
                 let label = format!("filter {}", col_names[c]);
                 ui.ctx()
@@ -1335,7 +1387,7 @@ impl App {
                 );
                 if let Some(z) = &tz_note {
                     hint.push_str(&format!(
-                        " Dates are compared with the values in the file (UTC), not the {z} times shown."
+                        " Times without an offset (>, <, between) are read in {z}, like the times shown. Text operators (contains, equals, regex, lists) match the UTC values in the file."
                     ));
                 }
                 ui.label(RichText::new(hint).weak().small());
@@ -1784,6 +1836,41 @@ pub fn forhunt_show_command_for_test(
     evidence: &str,
 ) -> Option<Result<String, String>> {
     forhunt_show_command(t, r, evidence)
+}
+
+/// Warning colour for notes the analyst must not miss.
+const WARN: Color32 = Color32::from_rgb(230, 120, 60);
+
+/// Column `c` is a time column shown in a zone other than UTC: text
+/// matching on it sees the file's UTC values (D-038).
+fn utc_text_note(t: &Tab, c: usize) -> bool {
+    !t.tz_display().is_utc()
+        && t.table
+            .column_index()
+            .is_some_and(|ci| matches!(ci.cols[c].kind, fhv_engine::columns::Kind::Time(_)))
+}
+
+/// Operators that match text (not ranges or blanks).
+fn is_text_op(op: &Op) -> bool {
+    !matches!(
+        op,
+        Op::Gt(_)
+            | Op::Ge(_)
+            | Op::Lt(_)
+            | Op::Le(_)
+            | Op::Between(..)
+            | Op::IsBlank
+            | Op::IsNotBlank
+    )
+}
+
+/// Chip label, in the warning colour when it carries a note.
+fn chip_text(text: String, note: &str) -> RichText {
+    if note.is_empty() {
+        RichText::new(text)
+    } else {
+        RichText::new(text).color(WARN)
+    }
 }
 
 fn forhunt_col(t: &Tab) -> Option<usize> {

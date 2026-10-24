@@ -148,7 +148,8 @@ pub struct Tab {
     pub grid: GridState,
     rows: Rows,
     rows_key: Option<(u64, Range<u64>)>,
-    tz_name: String,
+    /// Display zone: time-column range operands are read in it (D-038).
+    tz: tz::Display,
     last_query: Option<Query>,
     /// Text the app should put on the clipboard (from a background job).
     pub clipboard: Option<String>,
@@ -232,7 +233,7 @@ impl Tab {
                 r
             },
             rows_key: None,
-            tz_name: "UTC".into(),
+            tz: tz::Display::new("UTC"),
             last_query: None,
             nums: Vec::new(),
             nums_first: 0,
@@ -296,11 +297,19 @@ impl Tab {
     /// The filter expression of the current UI state (None = all rows).
     pub fn expr(&self) -> Option<Expr> {
         let mut all = Vec::new();
+        let cols = self.table.column_index();
         for (c, f) in self.filters.iter().enumerate() {
+            let time_order = match cols.as_ref().map(|ci| ci.cols[c].kind) {
+                Some(Kind::Time(o)) => Some(o),
+                _ => None,
+            };
             let pred = |op: Op| {
                 Expr::Pred(Pred {
                     target: Target::Column(c),
-                    op,
+                    op: match time_order {
+                        Some(o) => self.tz.op_to_utc(&op, o),
+                        None => op,
+                    },
                     case_sensitive: f.case_sensitive,
                 })
             };
@@ -338,6 +347,16 @@ impl Tab {
             }));
         }
         (!all.is_empty()).then_some(Expr::And(all))
+    }
+
+    #[cfg(test)]
+    pub fn view_query_for_test(&self) -> Option<&Query> {
+        self.last_query.as_ref()
+    }
+
+    /// Display zone name, and whether it differs from UTC.
+    pub fn tz_display(&self) -> &tz::Display {
+        &self.tz
     }
 
     pub fn query(&self) -> Query {
@@ -489,9 +508,11 @@ impl Tab {
     /// Advances background work; call every frame. Returns true while
     /// something is running (to keep repainting).
     pub fn poll(&mut self, tz_name: &str) -> bool {
-        if self.tz_name != tz_name {
-            self.tz_name = tz_name.to_string();
+        if self.tz.name != tz_name {
+            self.tz = tz::Display::new(tz_name);
             self.rows_key = None;
+            // Time filters are read in the display zone.
+            self.requery();
         }
         if let Some(rx) = &self.loader {
             match rx.try_recv() {
