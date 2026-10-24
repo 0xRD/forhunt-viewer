@@ -740,3 +740,40 @@ fn time_filters_follow_the_display_zone() {
     h.get_by_label_contains("contains \"2025-10-26 01\" [UTC file values]");
     h.get_by_label("time columns: UTC file values");
 }
+
+/// A file without numbers or dates: taking the first row as the header is
+/// a guess, shown in the status bar. Reopening without a header brings the
+/// first row back as data; a delimiter override splits the columns again.
+#[test]
+fn reopen_with_header_and_delimiter_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("pairs.csv");
+    std::fs::write(&file, "alice,pc1\nbob,pc2\ncarol,pc3\n").unwrap();
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    assert!(h.state().tabs[0].table.header_guessed);
+    assert_eq!(h.state().tabs[0].table.row_count(), 2);
+    h.get_by_label("first row taken as header (a guess)");
+    h.state_mut().reopen_with(0, false, b',');
+    wait(&mut h, idle);
+    let t = &h.state().tabs[0];
+    assert_eq!(t.table.row_count(), 3);
+    assert_eq!(t.table.row_fields(0).unwrap(), ["alice", "pc1"]);
+    assert!(!t.table.header_guessed);
+    assert!(
+        h.query_by_label("first row taken as header (a guess)")
+            .is_none()
+    );
+    // Delimiter: read the same file with ';' (one column per row).
+    h.state_mut().reopen_with(0, false, b';');
+    wait(&mut h, idle);
+    let t = &h.state().tabs[0];
+    assert_eq!(t.table.columns.len(), 1);
+    assert_eq!(t.table.row_fields(1).unwrap(), ["bob,pc2"]);
+    // A file with numbers: the header is not a guess.
+    let num = dir.path().join("num.csv");
+    std::fs::write(&num, "user,count\nalice,3\n").unwrap();
+    h.state_mut().open(&num);
+    wait(&mut h, |a| a.tabs.len() == 2 && a.tabs[1].ready());
+    assert!(!h.state().tabs[1].table.header_guessed);
+}

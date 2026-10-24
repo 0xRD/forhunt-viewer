@@ -50,6 +50,9 @@ pub struct Table {
     pub file_len: u64,
     pub encoding: Encoding,
     pub dialect: Dialect,
+    /// The header was detected without evidence (all-text sample): the
+    /// first row may be data. False when the dialect was given.
+    pub header_guessed: bool,
     pub columns: Vec<String>,
     opts: OpenOptions,
     tables: Tables,
@@ -252,6 +255,8 @@ impl Table {
         let dialect = opts
             .dialect
             .unwrap_or_else(|| dialect::sniff(&sample, whole));
+        let header_guessed =
+            opts.dialect.is_none() && dialect::header_guessed(&sample, whole, &dialect);
         let tables = Tables::new(dialect.delim, dialect.quote);
 
         // First row: header names, or the column count for generic names.
@@ -306,6 +311,7 @@ impl Table {
             file_len,
             encoding,
             dialect,
+            header_guessed,
             columns: unique_names(names),
             opts,
             tables,

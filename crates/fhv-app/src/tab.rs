@@ -178,7 +178,19 @@ fn initial_width(name: &str) -> f32 {
 
 impl Tab {
     pub fn open(path: &Path, cache: &Path) -> anyhow::Result<Tab> {
-        let table = Arc::new(Table::open(path, OpenOptions::new(cache))?);
+        Self::open_with(path, cache, None)
+    }
+
+    /// Opens with a given dialect (header on/off, delimiter) instead of the
+    /// detected one.
+    pub fn open_with(
+        path: &Path,
+        cache: &Path,
+        dialect: Option<fhv_engine::Dialect>,
+    ) -> anyhow::Result<Tab> {
+        let mut opts = OpenOptions::new(cache);
+        opts.dialect = dialect;
+        let table = Arc::new(Table::open(path, opts)?);
         let (tx, rx) = channel();
         {
             let t = table.clone();

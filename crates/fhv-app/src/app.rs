@@ -122,6 +122,8 @@ pub struct App {
     goto: Option<String>,
     note_edit: Option<(u32, String)>,
     evidence_dlg: Option<String>,
+    /// Reopen with options: (tab path, first row is header, delimiter).
+    reopen_dlg: Option<(PathBuf, bool, String)>,
     /// Evidence being parsed by forhunt into a CSV (D-033).
     conversions: Vec<crate::convert::Conversion>,
     pub(crate) help: bool,
@@ -165,6 +167,7 @@ impl App {
             goto: None,
             note_edit: None,
             evidence_dlg: None,
+            reopen_dlg: None,
             conversions: Vec::new(),
             help: false,
             focus_search: false,
@@ -385,6 +388,24 @@ impl App {
         }
     }
 
+    /// Reopens tab `i` with the given header / delimiter (state of the old
+    /// tab is dropped: the columns may differ). Errors go to the error box.
+    pub fn reopen_with(&mut self, i: usize, header: bool, delim: u8) {
+        let Some(old) = self.tabs.get(i) else { return };
+        let mut d = old.table.dialect;
+        d.header = header;
+        d.delim = delim;
+        match Tab::open_with(&old.path.clone(), &self.cache_dir, Some(d)) {
+            Ok(mut t) => {
+                t.origin = old.origin.clone();
+                self.tabs[i].cancel_job();
+                self.tabs[i] = t;
+                self.active = i;
+            }
+            Err(e) => self.error = Some(format!("{}: {e}", old.path.display())),
+        }
+    }
+
     fn close_tab(&mut self, i: usize) {
         if i < self.tabs.len() {
             self.tabs[i].cancel_job();
@@ -407,6 +428,21 @@ impl App {
                 {
                     ui.close();
                     self.open_folder_dialog();
+                }
+                if ui
+                    .add_enabled(!self.tabs.is_empty(), egui::Button::new("Reopen with options…"))
+                    .on_hover_text("first row is header on/off, delimiter")
+                    .clicked()
+                {
+                    ui.close();
+                    if let Some(t) = self.tabs.get(self.active) {
+                        let d = t.table.dialect;
+                        let delim = match d.delim {
+                            b'\t' => "tab".to_string(),
+                            c => (c as char).to_string(),
+                        };
+                        self.reopen_dlg = Some((t.path.clone(), d.header, delim));
+                    }
                 }
                 ui.menu_button("Open recent", |ui| {
                     let recent = self.settings.recent.clone();
@@ -819,6 +855,14 @@ impl App {
                 ui.label(s);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if t.table.header_guessed {
+                    ui.label(RichText::new("first row taken as header (a guess)").color(WARN))
+                        .on_hover_text(
+                            "No cell looks like a number or a date, so the first row was \
+                             taken as column names. If it is data, File > Reopen with \
+                             options… and untick \"First row is a header\".",
+                        );
+                }
                 let d = &t.table.dialect;
                 let delim = match d.delim {
                     b'\t' => "tab".to_string(),
@@ -1598,6 +1642,44 @@ impl App {
     }
 
     fn small_dialogs(&mut self, ctx: &egui::Context) {
+        if let Some((path, header, delim)) = &mut self.reopen_dlg {
+            let mut open = true;
+            let mut go = false;
+            egui::Window::new("Reopen with options")
+                .open(&mut open)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.label(path.display().to_string());
+                    ui.checkbox(header, "First row is a header");
+                    ui.horizontal(|ui| {
+                        ui.label("Delimiter");
+                        for d in [",", ";", "tab", "|"] {
+                            ui.selectable_value(delim, d.to_string(), d);
+                        }
+                        ui.add(egui::TextEdit::singleline(delim).desired_width(30.0));
+                    });
+                    go = ui.button("Reopen").clicked();
+                });
+            if go {
+                let d = match delim.as_str() {
+                    "tab" | "\\t" => Some(b'\t'),
+                    s if s.len() == 1 => s.bytes().next(),
+                    _ => None,
+                };
+                let (path, header) = (path.clone(), *header);
+                match d {
+                    Some(d) => {
+                        self.reopen_dlg = None;
+                        if let Some(i) = self.tabs.iter().position(|t| t.path == path) {
+                            self.reopen_with(i, header, d);
+                        }
+                    }
+                    None => self.error = Some("delimiter: one character, or tab".into()),
+                }
+            } else if !open {
+                self.reopen_dlg = None;
+            }
+        }
         if let Some(text) = &mut self.goto {
             let mut done = false;
             let mut open = true;

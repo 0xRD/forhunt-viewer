@@ -202,6 +202,23 @@ pub fn sniff(sample: &[u8], whole: bool) -> Dialect {
     }
 }
 
+/// Whether a detected header was a guess: the first row was taken as
+/// column names only because none of its cells is a number or a date, and
+/// no later sampled row has one either, so nothing tells names from data.
+pub fn header_guessed(sample: &[u8], whole: bool, d: &Dialect) -> bool {
+    if !d.header {
+        return false;
+    }
+    let t = Tables::new(d.delim, d.quote);
+    let mut spans: Vec<Span> = Vec::new();
+    !sample_rows(&t, sample, whole).iter().skip(1).any(|r| {
+        split_row(&t, r, &mut spans);
+        spans
+            .iter()
+            .any(|s| looks_like_data(&r[s.start as usize..s.end as usize]))
+    })
+}
+
 /// A cell that is a number or a date-time is data, not a column name.
 fn looks_like_data(cell: &[u8]) -> bool {
     let s = match std::str::from_utf8(cell) {
@@ -277,6 +294,17 @@ pub fn transcode(enc: Encoding, input: &[u8], out: &mut Vec<u8>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn header_guess() {
+        let d = sniff(b"user,host\nalice,pc1\nbob,pc2\n", true);
+        assert!(d.header && header_guessed(b"user,host\nalice,pc1\nbob,pc2\n", true, &d));
+        let s = b"user,count\nalice,3\nbob,4\n";
+        let d = sniff(s, true);
+        assert!(d.header && !header_guessed(s, true, &d));
+        let s = b"alice,3\nbob,4\n";
+        assert!(!header_guessed(s, true, &sniff(s, true)));
+    }
 
     #[test]
     fn encodings() {
