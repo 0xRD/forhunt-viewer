@@ -475,3 +475,56 @@ fn session_restores_bad_rows_only() {
     let want: Vec<u32> = (0..400_000).filter(|i| i % 40_000 == 7).collect();
     assert!(rows == want, "{} rows shown, want {want:?}", rows.len());
 }
+
+/// Export writes the rows of the filter shown in the chips: while a new
+/// filter is not applied yet (typing pause) or failed (bad regex), it
+/// refuses instead of writing the previous view's rows.
+#[test]
+fn export_refuses_a_view_that_is_not_the_current_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    let out = dir.path().join("out.csv");
+    let cols = h.state().tabs[0].order.clone();
+    // A new filter, not applied yet.
+    let t = &mut h.state_mut().tabs[0];
+    t.filters[2].quick = "jdoe".into();
+    t.requery();
+    t.start_export(
+        out.clone(),
+        false,
+        cols.clone(),
+        fhv_engine::export::Format::Csv,
+    );
+    assert!(t.job.is_none() && !out.exists(), "exported a stale view");
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 250);
+    // Applied: the export holds exactly the filtered rows.
+    h.state_mut().tabs[0].start_export(
+        out.clone(),
+        false,
+        cols.clone(),
+        fhv_engine::export::Format::Csv,
+    );
+    wait(&mut h, |a| a.tabs[0].job.is_none());
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert_eq!(text.lines().count(), 251);
+    assert!(text.lines().skip(1).all(|l| l.contains(",jdoe,")));
+    std::fs::remove_file(&out).unwrap();
+    // A filter that fails (invalid regex): the view still shows the rows
+    // of the previous filter; no export.
+    h.state_mut().tabs[0].filters[3]
+        .conds
+        .push(Op::Regex("(".into()));
+    h.state_mut().tabs[0].requery();
+    wait(&mut h, |a| {
+        a.tabs[0].job.is_none()
+            && a.tabs[0]
+                .status
+                .as_deref()
+                .is_some_and(|s| s.starts_with("error"))
+    });
+    h.state_mut().tabs[0].start_export(out.clone(), false, cols, fhv_engine::export::Format::Csv);
+    h.step();
+    assert!(h.state().tabs[0].job.is_none() && !out.exists());
+}

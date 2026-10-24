@@ -394,6 +394,15 @@ impl Tab {
             self.status = Some("busy: wait for the current operation".into());
             return;
         }
+        // The rows shown must be those of the filter and sort shown.
+        if self.pending || self.last_query.as_ref() != Some(&self.query()) {
+            self.status = Some(
+                "not exported: the current filter / sort is not applied yet or failed; \
+                 wait for it (or fix it), then export"
+                    .into(),
+            );
+            return;
+        }
         let t = self.table.clone();
         let p = path.clone();
         let view = self.view.clone();
