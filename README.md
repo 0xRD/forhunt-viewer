@@ -43,7 +43,8 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
     day, minute or second written, so `between 2024-03-01 and 2024-03-01`
     is that day).
   - Match all / any.
-  - Excel-style value list with counts and search.
+  - Excel-style value list with counts and search. It, and the cell menu's
+    "= / ≠ this value", select exact values (case and spaces count).
   - Filter chips; clear all.
 - **Global search** in every column, with match highlighting and next /
   previous (F3). Tick *only matches* to hide the rows without the search
