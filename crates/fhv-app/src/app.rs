@@ -2278,8 +2278,8 @@ impl eframe::App for App {
 }
 
 impl App {
-    /// Same pattern as the phase 1 spike: 40 frames of smooth scrolling (3
-    /// rows/frame), then 10 jumps, once the first tab is ready.
+    /// 40 frames of smooth scrolling (3 rows/frame), then 10 jumps, once the
+    /// first tab is ready.
     fn bench_step(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         let Some((total, ui_ms, cpu_ms)) = &mut self.bench else {
             return;

@@ -37,7 +37,7 @@ pub struct Dirs {
 /// OS config and cache directories (never next to the evidence), following
 /// each platform's convention (XDG on Linux, ~/Library on macOS,
 /// %APPDATA% / %LOCALAPPDATA% on Windows). Written by hand: the usual crate
-/// pulls in an MPL-2.0 dependency (DECISIONS.md D-019).
+/// pulls in an MPL-2.0 dependency (docs/DECISIONS.md D-019).
 pub fn dirs() -> Dirs {
     const APP: &str = "forhunt-viewer";
     let env = |k: &str| {

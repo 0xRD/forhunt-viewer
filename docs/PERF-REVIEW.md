@@ -2,7 +2,7 @@
 
 Scope: column pass, scan filters, text sort, memory. Nothing in the repository
 sources was changed. All prototypes ran in a scratch copy (`/tmp/claude-0/perf/repo`);
-the diff is in `docs/perf-review-prototype.diff`. Only numbers that were run are
+the diff is in `the prototype diff (git history, removed in 0.3.0)`. Only numbers that were run are
 listed. Machine M1 (4 cores Xeon 2.1 GHz, 15 GiB, virtio disk).
 
 **Measurement noise.** M1 is a shared VM. The same binary varied by 25-40 % between
@@ -251,6 +251,6 @@ memory is `threads x 4 x block bytes`, i.e. proportional to row width x cores (F
 4. F5 (free), then continue F2's pair-aware quote scanning, then F6 experiments.
 
 Prototype diff (scan.rs, source.rs, filter.rs, columns.rs, table.rs + `regex-syntax`
-dependency): `docs/perf-review-prototype.diff`. All fhv-engine tests (lib 16 incl. the new
+dependency): `the prototype diff (git history, removed in 0.3.0)`. All fhv-engine tests (lib 16 incl. the new
 fuzz test, integration incl. the filter-vs-naive proptest) and `cargo clippy -p fhv-engine
 -D warnings` pass on it.

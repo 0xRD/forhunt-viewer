@@ -15,7 +15,6 @@ mod grid;
 mod macos;
 mod session;
 mod settings;
-mod spike;
 mod tab;
 mod tz;
 #[cfg(test)]
@@ -40,9 +39,6 @@ fn main() -> eframe::Result {
         );
         return Ok(());
     }
-    // Hidden: the phase 1 grid benchmark (docs/PERF.md).
-    let spike = flag(&args, "--spike-rows");
-    let bench = flag(&args, "--bench-frames").map(|n| n as usize);
     // Files: every argument that is not an option or an option's value;
     // everything after `--`. macOS may add `-psn_...` (process serial).
     let mut files: Vec<PathBuf> = Vec::new();
@@ -52,9 +48,6 @@ fn main() -> eframe::Result {
             "--" => {
                 files.extend(it.by_ref().map(PathBuf::from));
                 break;
-            }
-            "--spike-rows" | "--bench-frames" => {
-                it.next();
             }
             a if a.starts_with("-psn_") || a.starts_with("--") => {}
             a => files.push(PathBuf::from(a)),
@@ -72,27 +65,15 @@ fn main() -> eframe::Result {
             }),
         ..Default::default()
     };
-    opts.glow_options.vsync = bench.is_none() && std::env::var_os("FHV_BENCH_SCROLL").is_none();
+    // Hidden scroll benchmark (docs/PERF.md) measures frames without vsync.
+    opts.glow_options.vsync = std::env::var_os("FHV_BENCH_SCROLL").is_none();
     eframe::run_native(
         "forhunt-viewer",
         opts,
-        Box::new(move |cc| match spike {
-            Some(rows) => {
-                fonts::install(&cc.egui_ctx);
-                Ok(Box::new(spike::Spike::new(rows, bench)) as Box<dyn eframe::App>)
-            }
-            None => {
-                #[cfg(target_os = "macos")]
-                macos::set_context(&cc.egui_ctx);
-                Ok(Box::new(app::App::new(cc, files)))
-            }
+        Box::new(move |cc| {
+            #[cfg(target_os = "macos")]
+            macos::set_context(&cc.egui_ctx);
+            Ok(Box::new(app::App::new(cc, files)))
         }),
     )
-}
-
-fn flag(args: &[String], name: &str) -> Option<u64> {
-    args.iter()
-        .position(|a| a == name)
-        .and_then(|i| args.get(i + 1))
-        .and_then(|v| v.parse().ok())
 }

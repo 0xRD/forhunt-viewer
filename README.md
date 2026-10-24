@@ -67,7 +67,12 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
 - **Files.**
   - Tabs, drag and drop, recent files.
   - Encodings: UTF-8 (with or without BOM), UTF-16LE/BE, Windows-1252.
-  - Delimiters `,` `;` tab `|`, auto-detected.
+  - Delimiters `,` `;` tab `|`, auto-detected. When the header row was only a
+    guess, the status bar says so; File > *Reopen with options…* sets the
+    header and delimiter by hand.
+  - Dates: day/month order is detected per column and can be set in the
+    column menu. A range filter shows on its chip how many cells it could
+    not read as dates or numbers, so rows are never left out silently.
 - **Display time zone.** Times are converted for display only; the data
   stays as in the file. In date filters (`>`, `<`, between), a time typed
   without an offset means the display zone, like the times shown (a day
@@ -146,12 +151,14 @@ On Linux, building also needs `libxkbcommon-dev`, `libwayland-dev`,
 
 ## "Open with"
 
-forhunt-viewer adds itself to the *Open with* menu for CSV/TSV files. It
-never becomes the default application unless you choose it.
+forhunt-viewer adds itself to the *Open with* menu for CSV/TSV files and
+Windows event logs (`.evtx`; also folders on macOS). It never becomes the
+default application unless you choose it.
 
-- **macOS.** Right-click a `.csv` > *Open With* > *forhunt-viewer*. (Finder
-  learns about the app once it is in Applications and has been opened once.)
-- **Windows (MSI).** Right-click a `.csv` / `.tsv` > *Open with* >
+- **macOS.** Right-click a `.csv`, `.evtx` or folder > *Open With* >
+  *forhunt-viewer*. (Finder learns about the app once it is in Applications
+  and has been opened once.)
+- **Windows (MSI).** Right-click a `.csv` / `.tsv` / `.evtx` > *Open with* >
   *forhunt-viewer*. To make it the default: *Choose another app* > tick
   *Always*.
 - **Linux.** Install the `.desktop` file:
@@ -164,7 +171,8 @@ never becomes the default application unless you choose it.
   Then use *Open With > forhunt-viewer* in your file manager. To make it the
   default: `xdg-mime default forhunt-viewer.desktop text/csv`.
 
-Command line: `forhunt-viewer [FILE...]`.
+Command line: `forhunt-viewer [PATH...]` (CSV/TSV files, `.evtx`, `$MFT`,
+`$J` or evidence folders).
 
 ## Keyboard shortcuts
 
@@ -205,7 +213,7 @@ page cache unless noted. Details, commands and more results are in
 
 Known slow case: a full sort of a long free-text column over 20 M rows takes
 ~11 s (it stays responsive and can be cancelled). The same sort on a filtered
-view of 1 M rows takes 0.8 s. See DECISIONS.md D-013.
+view of 1 M rows takes 0.8 s. See docs/DECISIONS.md D-013.
 
 ## How it works (short)
 
@@ -223,12 +231,27 @@ view of 1 M rows takes 0.8 s. See DECISIONS.md D-013.
   - **Tests.** Property-tested against naive implementations.
 - `crates/fhv-app` is the egui/eframe application with a custom virtual
   grid. Its scroll position is a row index, so huge files scroll smoothly
-  (measured: 20 M real rows, and 1 B synthetic rows in the grid
-  benchmark).
+  (measured: 20 M real rows, and 1 B synthetic rows in an early grid
+  prototype).
 - `tools/csv-gen` generates synthetic, seeded test data: forhunt / EvtxECmd,
   MFTECmd, Hayabusa, plaso layouts, and an edge-case suite.
 
-Design decisions with measurements: [DECISIONS.md](DECISIONS.md).
+More: [docs/DESIGN.md](docs/DESIGN.md),
+[docs/DECISIONS.md](docs/DECISIONS.md) (every design decision, with
+measurements), [docs/PERF.md](docs/PERF.md),
+[docs/ROADMAP.md](docs/ROADMAP.md) and [CHANGELOG.md](CHANGELOG.md).
+
+## Testing
+
+Filters, sorts and exports are checked against an independent
+implementation, not against the viewer itself: a Python oracle (its own CSV,
+time and number parsing) recomputed about 105,000 queries on a real
+two-host lab timeline (56,930 events, French-locale Windows) and on every
+synthetic layout and edge case (quoted newlines, UTF-16, Windows-1252,
+ragged rows): every operator on every column, with and without case
+sensitivity, value lists, AND/OR/NOT trees, global search, sorts, tags and
+export round trips, with no mismatch. Unit, property and UI tests
+(egui_kittest) run in CI on Linux, macOS and Windows.
 
 ## Development
 

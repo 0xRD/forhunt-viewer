@@ -1,14 +1,8 @@
-# forhunt-viewer: plan
+# Design
 
-A native, very fast timeline/CSV viewer for forensic analysts. It is the
-graphical companion of [forhunt](https://github.com/0xRD/forensic-hunter).
-It opens multi-GB CSV files (5-20 GB, 10-100 M rows) instantly and filters
-them interactively.
-
-The brief is the source of truth for scope. This file explains how the work
-is split, the starting design, and how each target is measured. Deviations go
-in DECISIONS.md, blockers in BLOCKERS.md, progress in STATUS.md, and numbers
-in docs/PERF.md.
+How forhunt-viewer is built, and the targets it is measured against
+(numbers in [PERF.md](PERF.md), decisions and their reasons in
+[DECISIONS.md](DECISIONS.md)).
 
 ## Principles (from the brief, condensed)
 
@@ -35,6 +29,9 @@ docs/PERF.md        every measurement
 ```
 
 ## Engine design (starting point, validated by measurement)
+
+*This section is the starting design; the measurements changed parts of it:
+positional reads replaced the mapping (D-008), see DECISIONS.md.*
 
 **Access.** The engine memory-maps the file read-only (`memmap2`) and uses the
 mapping for random row access and the parallel scans. Positional reads are
@@ -167,8 +164,8 @@ the error shown in the UI.
   - AppImage and .tar.gz.
   - A .desktop file with `MimeType=text/csv;text/tab-separated-values;`, plus an
     icon.
-- **Homebrew.** Cask template now; publishing after v0.1.0 needs a tap token
-  (user decision: later, BLOCKERS.md).
+- **Homebrew.** Cask `forhunt-viewer` in `0xRD/homebrew-tap`, bumped by
+  `scripts/release-macos-local.sh` (D-032).
 
 ## Quality, CI, release
 
@@ -189,17 +186,6 @@ the error shown in the UI.
   - AppImage and .tar.gz;
   - a `.sha256` for each.
 
-## Phases
-
-| Phase | Content | Exit criterion |
-|---|---|---|
-| 0 | Docs, workspace, licences, deny.toml, CI, csv-gen + edge-case suite | CI green; generator deterministic (checked in CI) |
-| 1 | Spike: virtual grid, 100 M rows at 60 fps; choose the GUI stack | Frame-time numbers in PERF.md; decision recorded |
-| 2 | Engine: dialect, parallel row index, cache, random row access; benches | Index throughput and reopen time measured on a 5 GB file |
-| 3 | Column indexes, filter engine, sort; proptests; benches vs targets | Acceptance table filled for the engine |
-| 4 | App MVP features | Every MVP feature usable; kittest smoke tests |
-| 5 | Packaging for the 3 OSes, release workflow, README | Release dry run green |
-| 6 | Fresh-eyes review agent (Sonnet), perf analysis agent (Sonnet), fixes, v0.1.0 | CI green on the tagged commit |
 
 ## Acceptance targets and how they are measured
 
@@ -220,12 +206,3 @@ extrapolated only with a recorded rationale.
 | 60 fps scrolling | App frame CPU time (p50/p99) on scripted scrolling |
 | Peak memory | `/usr/bin/time -v` max RSS, plus private memory from `/proc/self/smaps_rollup` |
 
-## Later (not in the MVP)
-
-- Group-by with counts.
-- Colour rules.
-- Per-tool column layouts (our own definitions).
-- Multi-file merged timeline.
-- ~~Opening evidence directly via `forhunt-core` pinned to a git tag.~~ Done in 0.2.0 (D-033).
-- JSONL input.
-- Column statistics and a time histogram.

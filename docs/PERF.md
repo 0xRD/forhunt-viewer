@@ -11,6 +11,9 @@ number without a measurement. Newest sections last.
 
 ## Phase 1: virtual grid spike (2026-10-22)
 
+The spike (`--spike-rows`) was a prototype, removed in 0.3.0; it is in the
+git history before that release.
+
 Machine M1, Xvfb 1920x1080, Mesa llvmpipe (software OpenGL, no GPU), window
 1600x1000 (~47 visible rows x 13 columns), vsync off, release build.
 The benchmark scrolls 3 rows per frame for 40 frames, then jumps to a far
@@ -208,7 +211,7 @@ UI problems this check found, both fixed:
 ## Phase 6: perf review fixes (2026-10-22)
 
 A perf analysis (docs/PERF-REVIEW.md, prototype in
-docs/perf-review-prototype.diff) found five items. Merged:
+the prototype diff (git history, removed in 0.3.0)) found five items. Merged:
 
 - F1 (review R-005): parallel blocks capped by bytes as well as rows.
   Wide-row file (4 000 x 100 KB): rows ready 1.69 -> 0.22 s, peak RSS

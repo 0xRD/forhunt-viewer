@@ -1,5 +1,5 @@
 //! Bundled fonts: Inter (UI) and JetBrains Mono (grid), both SIL OFL 1.1,
-//! unmodified upstream files (see assets/fonts/OFL-*.txt and DECISIONS.md).
+//! unmodified upstream files (see assets/fonts/OFL-*.txt and docs/DECISIONS.md).
 //! egui's default fonts are not used: one of them is under the Ubuntu Font
 //! Licence, which is outside the project's licence policy.
 
