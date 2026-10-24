@@ -433,3 +433,45 @@ fn f3_visits_every_hit_in_view_order() {
         );
     }
 }
+
+/// A session restores "bad rows only" too, and the restored filter keeps
+/// only the bad rows even when it is applied while the file is still
+/// indexing (the bad-row set did not exist yet).
+#[test]
+fn session_restores_bad_rows_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("ragged.csv");
+    // Large enough that indexing is still running when the session is
+    // applied to the second window.
+    let mut s = String::from("a,b,c\n");
+    for i in 0..400_000 {
+        if i % 40_000 == 7 {
+            s.push_str(&format!("{i},short\n"));
+        } else {
+            s.push_str(&format!("{i},x,y\n"));
+        }
+    }
+    std::fs::write(&file, s).unwrap();
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    h.state_mut().tabs[0].bad_rows();
+    h.state_mut().tabs[0].bad_only = true;
+    h.state_mut().tabs[0].requery();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 10);
+    let session = crate::session::capture(&h.state().tabs[0]);
+    let json = serde_json::to_string(&session).unwrap();
+
+    // Fresh window: apply the session before indexing finishes.
+    let mut h = harness(dir.path(), &file);
+    let s2: crate::session::Session = serde_json::from_str(&json).unwrap();
+    eprintln!("ready at apply: {}", h.state().tabs[0].ready());
+    assert!(!h.state().tabs[0].ready());
+    crate::session::apply(&mut h.state_mut().tabs[0], &s2);
+    std::thread::sleep(Duration::from_millis(300));
+    wait(&mut h, idle);
+    let t = &h.state().tabs[0];
+    assert!(t.bad_only);
+    let rows: Vec<u32> = t.view.iter().collect();
+    let want: Vec<u32> = (0..400_000).filter(|i| i % 40_000 == 7).collect();
+    assert!(rows == want, "{} rows shown, want {want:?}", rows.len());
+}

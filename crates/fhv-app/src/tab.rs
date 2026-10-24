@@ -274,13 +274,17 @@ impl Tab {
         if let Some(b) = &self.bad {
             return b.clone();
         }
+        let b = Arc::new(self.compute_bad_rows());
+        if self.ready() {
+            self.bad = Some(b.clone());
+        }
+        b
+    }
+
+    fn compute_bad_rows(&self) -> RoaringBitmap {
         let mut b = self.table.structural_bad_rows();
         if let Some(ci) = self.table.column_index() {
             b |= &ci.ragged;
-        }
-        let b = Arc::new(b);
-        if self.ready() {
-            self.bad = Some(b.clone());
         }
         b
     }
@@ -325,10 +329,13 @@ impl Tab {
         if self.tagged_only {
             all.push(Expr::Rows(Arc::new(self.tag_set())));
         }
-        if self.bad_only
-            && let Some(b) = &self.bad
-        {
-            all.push(Expr::Rows(b.clone()));
+        if self.bad_only {
+            // Not cached yet (e.g. "bad rows only" restored by a session
+            // before the toolbar asked): compute it, never drop the term.
+            all.push(Expr::Rows(match &self.bad {
+                Some(b) => b.clone(),
+                None => Arc::new(self.compute_bad_rows()),
+            }));
         }
         (!all.is_empty()).then_some(Expr::And(all))
     }

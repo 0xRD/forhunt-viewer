@@ -25,6 +25,9 @@ pub struct Session {
     pub search: String,
     pub search_filter: bool,
     pub tagged_only: bool,
+    /// Absent in sessions of 0.2.1 and older.
+    #[serde(default)]
+    pub bad_only: bool,
     pub tags: Vec<(u32, String)>,
 }
 
@@ -73,6 +76,7 @@ pub fn capture(tab: &Tab) -> Session {
         search: tab.search.clone(),
         search_filter: tab.search_filter,
         tagged_only: tab.tagged_only,
+        bad_only: tab.bad_only,
         tags: tab.tags.iter().map(|(r, n)| (*r, n.clone())).collect(),
     }
 }
@@ -131,6 +135,7 @@ pub fn apply(tab: &mut Tab, s: &Session) -> Vec<String> {
     tab.search = s.search.clone();
     tab.search_filter = s.search_filter;
     tab.tagged_only = s.tagged_only;
+    tab.bad_only = s.bad_only;
     tab.requery();
     warn
 }
