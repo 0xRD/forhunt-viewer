@@ -32,6 +32,23 @@ Last update: 2026-10-22 (session 1)
 - v0.1.0: blocked on GitHub Actions billing (B-005). Code is release-ready
   at f247151 (local gate green); next: dispatch CI, then Release `tag=v0.1.0`
 
+## Verified on macOS (2026-10-24, Apple M4 Pro, local branch `local-setup`)
+- `scripts/check.sh` (fmt, clippy -D warnings, all tests incl. egui_kittest),
+  `scripts/check-gen.sh` and `cargo deny check` pass. `cargo deny` first failed
+  on a yanked `clipboard-win 5.4.1` (Windows-only); bumped to 5.4.3.
+- Release build for aarch64-apple-darwin (MACOSX_DEPLOYMENT_TARGET=11.0) and
+  `scripts/package-macos.sh 0.1.0` produce a working .app in a .dmg: arm64
+  Mach-O, ad-hoc signature verifies (`codesign --verify --deep --strict`),
+  Info.plist lints, icon.icns present.
+- Launch with a CLI path, `open -a forhunt-viewer.app file.csv` (cold start)
+  and `open -a ... other.csv` on a running instance (a second tab opens):
+  the Apple Event `application:openURLs:` delegate (D-026) works. Rendering
+  checked in screenshots with a 2 M row / 1.2 GiB forhunt-layout file.
+- fhv-bench on that file: index 0.30 s warm (4.2 GB/s), filters 0-65 ms, sorts
+  0.1-290 ms. Consistent with docs/PERF.md.
+
 ## Not verifiable here
-- macOS / Windows packaging and the macOS Open With delegate run only in
-  the release workflow (no Mac / Windows machine in the build container).
+- The callgrind perf gate (needs valgrind; not available on macOS arm64).
+- Gatekeeper first-launch flow of a quarantined download (needs a downloaded
+  .dmg), Finder double-click default-handler behaviour, Windows packaging.
+- `fhv-bench` reports peak_rss_mib=0 on macOS (reads /proc only).
