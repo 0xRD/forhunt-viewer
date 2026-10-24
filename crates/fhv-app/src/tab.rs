@@ -697,20 +697,20 @@ impl Tab {
             Some(order) => {
                 use rayon::prelude::*;
                 let len = order.len();
-                let start = cur.map_or(if forward { len } else { 0 }, |p| p as usize);
                 let hit = |p: &usize| hits.contains(order[*p]);
-                let found = if forward {
-                    let after = (start.saturating_add(1).min(len)..len)
+                // Search after (before) the selection, then wrap around up
+                // to and including it; without a selection, the whole view.
+                let found = match (cur.map(|p| (p as usize).min(len - 1)), forward) {
+                    (None, true) => (0..len).into_par_iter().find_first(hit),
+                    (None, false) => (0..len).into_par_iter().find_last(hit),
+                    (Some(s), true) => (s + 1..len)
                         .into_par_iter()
-                        .find_first(hit);
-                    after.or_else(|| (0..start.min(len)).into_par_iter().find_first(hit))
-                } else {
-                    let before = (0..start.min(len)).into_par_iter().find_last(hit);
-                    before.or_else(|| {
-                        (start.saturating_add(1).min(len)..len)
-                            .into_par_iter()
-                            .find_last(hit)
-                    })
+                        .find_first(hit)
+                        .or_else(|| (0..=s).into_par_iter().find_first(hit)),
+                    (Some(s), false) => (0..s)
+                        .into_par_iter()
+                        .find_last(hit)
+                        .or_else(|| (s..len).into_par_iter().find_last(hit)),
                 };
                 found.map(|p| p as u64)
             }

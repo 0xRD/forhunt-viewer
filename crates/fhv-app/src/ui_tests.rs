@@ -359,3 +359,77 @@ fn cell_value_filters_are_exact_and_saved() {
     h.state_mut().tabs[0].filters[1].filter_value("bob".into(), false);
     assert_eq!(h.state().tabs[0].filters[1].values, Some(Op::In(vec![])));
 }
+
+/// F3 / Shift+F3 visit every hit in display order, in both directions, in
+/// file order and in a sorted view, wrapping around; with no selection,
+/// Shift+F3 starts from the last row (it used to skip display row 0 in a
+/// sorted view).
+#[test]
+fn f3_visits_every_hit_in_view_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    // "msg 99" hits rows 99 and 990..999.
+    h.state_mut().tabs[0].search = "msg 99".into();
+    wait(&mut h, |a| {
+        a.tabs[0].search_hits.is_some() && a.tabs[0].job.is_none()
+    });
+    for sort in [None, Some(true), Some(false)] {
+        let t = &mut h.state_mut().tabs[0];
+        // Message descending puts "msg 999" first; ascending "msg 0".
+        t.sort = sort
+            .map(|desc| vec![fhv_engine::SortKey { col: 3, desc }])
+            .unwrap_or_default();
+        t.requery();
+        wait(&mut h, |a| {
+            idle(a) && a.tabs[0].view.order.is_some() == sort.is_some()
+        });
+        let t = &mut h.state_mut().tabs[0];
+        let hits = t.search_hits.clone().unwrap();
+        let want: Vec<u64> = (0..t.view.len())
+            .filter(|&p| hits.contains(t.view.row_at(p).unwrap()))
+            .collect();
+        assert_eq!(want.len(), 11);
+        for forward in [true, false] {
+            t.grid.selected = None;
+            let mut seen = Vec::new();
+            for _ in 0..want.len() {
+                let p = t.find_hit(forward).unwrap();
+                seen.push(p);
+                t.grid.selected = Some(p);
+            }
+            let mut expect = want.clone();
+            if !forward {
+                expect.reverse();
+            }
+            assert_eq!(seen, expect, "sort {sort:?} forward {forward}");
+            // And it wraps around.
+            assert_eq!(t.find_hit(forward), Some(expect[0]));
+        }
+    }
+    // A single hit on display row 0 of a sorted view (Message descending).
+    h.state_mut().tabs[0].sort = vec![fhv_engine::SortKey { col: 3, desc: true }];
+    h.state_mut().tabs[0].requery();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.row_at(0) == Some(999));
+    h.state_mut().tabs[0].search = "msg 999".into();
+    wait(&mut h, |a| {
+        a.tabs[0].search_hits.as_ref().is_some_and(|b| b.len() == 1) && a.tabs[0].job.is_none()
+    });
+    let t = &mut h.state_mut().tabs[0];
+    assert_eq!(t.view.row_at(0), Some(999));
+    for forward in [true, false] {
+        t.grid.selected = None;
+        assert_eq!(
+            t.find_hit(forward),
+            Some(0),
+            "no selection, forward {forward}"
+        );
+        t.grid.selected = Some(0);
+        assert_eq!(
+            t.find_hit(forward),
+            Some(0),
+            "on the hit, forward {forward}"
+        );
+    }
+}
