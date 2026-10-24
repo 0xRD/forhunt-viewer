@@ -39,7 +39,9 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   - Per-column filter row ("contains").
   - Condition editor: equals, not equals, contains, not contains,
     begins/ends with, blank, not blank, regex, `>` `>=` `<` `<=`, between
-    (numbers and dates).
+    (numbers and dates; `<=` and the end of `between` include the whole
+    day, minute or second written, so `between 2024-03-01 and 2024-03-01`
+    is that day).
   - Match all / any.
   - Excel-style value list with counts and search.
   - Filter chips; clear all.

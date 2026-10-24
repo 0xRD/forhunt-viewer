@@ -149,6 +149,26 @@ fn parse_time(s: &str) -> Option<i64> {
     fhv_engine::time::parse_any(s.as_bytes())
 }
 
+/// Last tick of the period an operand names at its written precision
+/// (D-034): `2024-03-01` -> end of day, `... 10:00` -> end of the minute,
+/// `... 10:00:00` -> end of the second.
+fn time_end(s: &str) -> Option<i64> {
+    let t = parse_time(s)?;
+    let s = s.trim();
+    let span: i64 = match s.matches(':').count() {
+        0 => 86_400 * 10_000_000,
+        1 => 60 * 10_000_000,
+        _ => match s.split_once('.') {
+            None => 10_000_000,
+            Some((_, f)) => {
+                let digits = f.chars().take_while(char::is_ascii_digit).count();
+                10i64.pow(7u32.saturating_sub(digits as u32))
+            }
+        },
+    };
+    Some(t + span - 1)
+}
+
 /// Typed range test: time on the time column when the operand parses,
 /// numbers when both parse, else case-insensitive text.
 fn range(
@@ -187,9 +207,10 @@ fn range(
         Some(Ok(_)) => {
             let Some(t) = parse_time(v) else { return false };
             let ok_lo = lo.is_none_or(|l| matches!(bound(l), Some(Ok(l)) if cmp_ok(t.cmp(&l), lo_incl, Ordering::Greater)));
-            let ok_hi = hi.is_none_or(
-                |h| matches!(bound(h), Some(Ok(h)) if cmp_ok(t.cmp(&h), hi_incl, Ordering::Less)),
-            );
+            let ok_hi = hi.is_none_or(|h| {
+                let h = if hi_incl { time_end(h) } else { parse_time(h) };
+                matches!(h, Some(h) if cmp_ok(t.cmp(&h), hi_incl, Ordering::Less))
+            });
             ok_lo && ok_hi
         }
         Some(Err(_)) => {
@@ -288,6 +309,8 @@ fn operand() -> impl Strategy<Value = String> {
         (0u32..45).prop_map(|n| n.to_string()),
         (0u32..100_000).prop_map(|n| format!("{n}.5")),
         (1u32..4, 0u32..24).prop_map(|(d, h)| format!("2024-03-{d:02} {h:02}:00:00")),
+        (1u32..4, 0u32..24).prop_map(|(d, h)| format!("2024-03-{d:02} {h:02}:00")),
+        (1u32..4).prop_map(|d| format!("2024-03-{d:02}")),
         Just("id-1".to_string()),
         Just("ALP".to_string()),
         Just("".to_string()),

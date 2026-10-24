@@ -20,7 +20,9 @@
 //! field (short row) is an empty string; `>`/`<`/between compare as times
 //! when the column is a time column and the operand parses as one, else as
 //! numbers when both sides parse, else case-insensitively as text; cells that
-//! do not parse in a time/number comparison do not match.
+//! do not parse in a time/number comparison do not match. An inclusive upper
+//! time bound (`<=`, the end of `between`) covers the whole period written:
+//! `between 2024-03-01 and 2024-03-01` is that day (D-034).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -196,21 +198,44 @@ impl Compiled {
             Kind::Time(o) => Some(o),
             _ => None,
         };
-        let bound = |s: &str| -> Option<Bound> {
+        // An inclusive upper time bound covers the whole period it names
+        // (`<= 2024-03-01` is the whole day, `<= 10:00:00` the whole
+        // second); other bounds start at its first tick (D-034).
+        let bound = |s: &str, upper_incl: bool| -> Option<Bound> {
             if let Some(o) = order
-                && let Some(t) = time::parse(s.as_bytes(), o)
+                && let Some((t, span)) = time::parse_span(s.as_bytes(), o)
             {
-                return Some(Bound::Time(t));
+                return Some(Bound::Time(if upper_incl {
+                    t.saturating_add(span - 1)
+                } else {
+                    t
+                }));
             }
             parse_number(s.as_bytes()).map(Bound::Num)
         };
         let (range, text_lo, text_hi) = match op {
-            Op::Gt(v) => (Some((bound(v), None, false, true)), Some(norm(v)), None),
-            Op::Ge(v) => (Some((bound(v), None, true, true)), Some(norm(v)), None),
-            Op::Lt(v) => (Some((None, bound(v), true, false)), None, Some(norm(v))),
-            Op::Le(v) => (Some((None, bound(v), true, true)), None, Some(norm(v))),
+            Op::Gt(v) => (
+                Some((bound(v, false), None, false, true)),
+                Some(norm(v)),
+                None,
+            ),
+            Op::Ge(v) => (
+                Some((bound(v, false), None, true, true)),
+                Some(norm(v)),
+                None,
+            ),
+            Op::Lt(v) => (
+                Some((None, bound(v, false), true, false)),
+                None,
+                Some(norm(v)),
+            ),
+            Op::Le(v) => (
+                Some((None, bound(v, true), true, true)),
+                None,
+                Some(norm(v)),
+            ),
             Op::Between(a, b) => (
-                Some((bound(a), bound(b), true, true)),
+                Some((bound(a, false), bound(b, true), true, true)),
                 Some(norm(a)),
                 Some(norm(b)),
             ),

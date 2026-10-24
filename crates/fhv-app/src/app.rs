@@ -1331,7 +1331,7 @@ impl App {
                 }
                 changed |= ui.checkbox(&mut f.case_sensitive, "case sensitive").changed();
                 let mut hint = String::from(
-                    "Dates: 2024-03-11 10:00:00, ISO 8601 or the column's own format. Numbers compare numerically.",
+                    "Dates: 2024-03-11 10:00:00, ISO 8601 or the column's own format; <= and between include the whole day / minute / second written. Numbers compare numerically.",
                 );
                 if let Some(z) = &tz_note {
                     hint.push_str(&format!(

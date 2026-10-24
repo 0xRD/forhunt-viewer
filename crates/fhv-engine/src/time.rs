@@ -91,8 +91,9 @@ fn trim(b: &[u8]) -> &[u8] {
 }
 
 /// Parses `HH:mm[:ss[.f]][ AM|PM][offset]` after a date; returns ticks of
-/// the day plus the offset correction.
-fn time_part(c: &mut Cur<'_>, allow_ampm: bool) -> Option<i64> {
+/// the day plus the offset correction, and the unit of the last written
+/// component (a minute, a second, or 10^-k s for k fraction digits).
+fn time_part(c: &mut Cur<'_>, allow_ampm: bool) -> Option<(i64, i64)> {
     let h = c.num(1, 2)?;
     if !c.eat(b':') {
         return None;
@@ -100,8 +101,10 @@ fn time_part(c: &mut Cur<'_>, allow_ampm: bool) -> Option<i64> {
     let mi = c.num(2, 2)?;
     let mut s = 0;
     let mut frac: i64 = 0;
+    let mut unit = 60 * TICKS_PER_SEC;
     if c.eat(b':') {
         s = c.num(2, 2)?;
+        unit = TICKS_PER_SEC;
         if c.eat(b'.') || c.eat(b',') {
             let start = c.i;
             let mut digits = 0;
@@ -109,6 +112,7 @@ fn time_part(c: &mut Cur<'_>, allow_ampm: bool) -> Option<i64> {
                 if digits < 7 {
                     frac = frac * 10 + (d - b'0') as i64;
                     digits += 1;
+                    unit /= 10;
                 }
                 c.i += 1;
             }
@@ -169,7 +173,7 @@ fn time_part(c: &mut Cur<'_>, allow_ampm: bool) -> Option<i64> {
         }
         _ => c.i = save,
     }
-    Some(ticks)
+    Some((ticks, unit))
 }
 
 fn date_ticks(y: i64, m: u32, d: u32) -> Option<i64> {
@@ -181,6 +185,15 @@ fn date_ticks(y: i64, m: u32, d: u32) -> Option<i64> {
 
 /// Parses with a known day/month order for year-last dates.
 pub fn parse(b: &[u8], order: Order) -> Option<i64> {
+    parse_span(b, order).map(|(t, _)| t)
+}
+
+/// Like [`parse`], plus the length in ticks of the period the value names
+/// at the precision it is written with: a day for a date alone, a minute
+/// for `HH:mm`, a second for `HH:mm:ss`, 10^-k s for k fraction digits
+/// (1 tick from 7 digits on). `2024-03-01` covers the whole day.
+pub fn parse_span(b: &[u8], order: Order) -> Option<(i64, i64)> {
+    const DAY: i64 = 86_400 * TICKS_PER_SEC;
     let b = trim(b);
     if b.len() < 6 {
         return None;
@@ -198,13 +211,13 @@ pub fn parse(b: &[u8], order: Order) -> Option<i64> {
         let d = c.num(1, 2)?;
         let day = date_ticks(y, m, d)?;
         if c.done() {
-            return Some(day);
+            return Some((day, DAY));
         }
         if !(c.eat(b'T') || c.eat(b't') || c.eat(b' ')) {
             return None;
         }
-        let t = time_part(&mut c, false)?;
-        return c.done().then_some(day + t);
+        let (t, unit) = time_part(&mut c, false)?;
+        return c.done().then_some((day + t, unit));
     }
     // Year last: a/b/yyyy or a.b.yyyy
     let a = c.num(1, 2)?;
@@ -224,13 +237,13 @@ pub fn parse(b: &[u8], order: Order) -> Option<i64> {
     };
     let day = date_ticks(y, m, d)?;
     if c.done() {
-        return Some(day);
+        return Some((day, DAY));
     }
     if !c.eat(b' ') {
         return None;
     }
-    let t = time_part(&mut c, true)?;
-    c.done().then_some(day + t)
+    let (t, unit) = time_part(&mut c, true)?;
+    c.done().then_some((day + t, unit))
 }
 
 /// Parses any accepted shape; slash dates are taken as US month/day.
@@ -318,6 +331,19 @@ mod tests {
         assert_eq!(p("hello world"), None);
         assert_eq!(p("1970-01-01"), Some(0));
         assert_eq!(p("1601-01-01"), Some(-11_644_473_600 * TICKS_PER_SEC));
+    }
+
+    #[test]
+    fn spans_follow_the_written_precision() {
+        let p = |s: &str| parse_span(s.as_bytes(), Order::Ymd).map(|(_, u)| u);
+        assert_eq!(p("2024-03-01"), Some(86_400 * TICKS_PER_SEC));
+        assert_eq!(p("2024-03-01T10:00Z"), Some(60 * TICKS_PER_SEC));
+        assert_eq!(p("2024-03-01 10:00:00"), Some(TICKS_PER_SEC));
+        assert_eq!(p("2024-03-01 10:00:00.5 +02:00"), Some(TICKS_PER_SEC / 10));
+        assert_eq!(p("2024-03-01 10:00:00.1234567"), Some(1));
+        assert_eq!(p("2024-03-01 10:00:00.123456789"), Some(1));
+        assert_eq!(p("3/1/2024 1:00 PM"), Some(60 * TICKS_PER_SEC));
+        assert_eq!(p("01.03.2024"), Some(86_400 * TICKS_PER_SEC));
     }
 
     #[test]
