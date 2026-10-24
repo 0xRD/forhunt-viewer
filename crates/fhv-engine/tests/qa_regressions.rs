@@ -251,3 +251,59 @@ fn dictionary_ties_across_spellings_keep_file_order() {
         }
     }
 }
+
+/// A pasted list of IOCs is a case-insensitive `in` list: 2,000 values took
+/// 95 s on 57 k events (regex alternation) and 20,000 failed with "regex
+/// exceeds size limit". Large lists must work, with the same Unicode simple
+/// case folding as the other text operators (D-012).
+#[test]
+fn large_case_insensitive_in_lists() {
+    let mut x = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let hashes: Vec<String> = (0..4000)
+        .map(|_| format!("{:016x}{:016x}", next(), next()))
+        .collect();
+    let mut csv = String::from("Hash,Other\n");
+    for (i, h) in hashes.iter().enumerate() {
+        // Mixed case in the file.
+        let h = if i % 3 == 0 {
+            h.to_uppercase()
+        } else {
+            h.clone()
+        };
+        csv.push_str(&format!("{h},{i}\n"));
+    }
+    let fx = open(&csv);
+    assert!(
+        fx.engine.table().column_index().unwrap().cols[0]
+            .dict
+            .is_none()
+    );
+    // 20,000 values: every 4th hash of the file (in the other case), plus
+    // values that are not in the file.
+    let mut list: Vec<String> = hashes.iter().step_by(4).map(|h| h.to_uppercase()).collect();
+    list.extend((0..19_000).map(|_| format!("{:016x}{:016x}", next(), next())));
+    let want: Vec<u32> = (0..4000).step_by(4).collect();
+    assert_eq!(rows(&fx, 0, Op::In(list.clone())), want);
+    let not: Vec<u32> = (0..4000).filter(|i| i % 4 != 0).collect();
+    assert_eq!(rows(&fx, 0, Op::NotIn(list)), not);
+
+    // Unicode simple case folding, as for equals: Kelvin sign / K / k,
+    // long s / S / s, ß / ẞ, É / é; but not full folding (ß is not "ss").
+    let fx = open("v\nk\nK\n\u{212A}\nſ\ns\nß\nẞ\nss\nÉ\né\nE\n");
+    let list = vec!["K".to_string(), "S".into(), "ß".into(), "é".into()];
+    assert_eq!(
+        rows(&fx, 0, Op::In(list.clone())),
+        [0, 1, 2, 3, 4, 5, 6, 8, 9]
+    );
+    for v in &list {
+        let eq: Vec<u32> = rows(&fx, 0, Op::Equals(v.clone()));
+        let one: Vec<u32> = rows(&fx, 0, Op::In(vec![v.clone()]));
+        assert_eq!(eq, one, "{v}");
+    }
+}

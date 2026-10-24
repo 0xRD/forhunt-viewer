@@ -127,6 +127,10 @@ pub struct Compiled {
     needles: Vec<Vec<u8>>,
     /// User regex, or the case-insensitive matcher of a text operator.
     regex: Option<Regex>,
+    /// `in` / `not in`: the values, case-folded when case-insensitive (a
+    /// hash lookup per cell: lists of thousands of IOCs stay fast, where an
+    /// alternation regex was slow or over the size limit).
+    set: Option<rustc_hash::FxHashSet<Vec<u8>>>,
     /// For range operators: typed bounds (lo, hi) when the operand parses.
     range: Option<(Option<Bound>, Option<Bound>, bool, bool)>,
     /// Text fallback bounds for ranges.
@@ -178,10 +182,20 @@ impl Compiled {
             Op::Contains(v) | Op::NotContains(v) => Some(lit(v)),
             Op::BeginsWith(v) => Some(format!("^(?:{})", lit(v))),
             Op::EndsWith(v) => Some(format!("(?:{})$", lit(v))),
-            Op::In(vs) | Op::NotIn(vs) if !vs.is_empty() => Some(format!(
-                "^(?:{})$",
-                vs.iter().map(|v| lit(v)).collect::<Vec<_>>().join("|")
-            )),
+            _ => None,
+        };
+        let set = match op {
+            Op::In(vs) | Op::NotIn(vs) => Some(
+                vs.iter()
+                    .filter_map(|v| {
+                        if ci {
+                            fold_simple(v.as_bytes())
+                        } else {
+                            Some(v.as_bytes().to_vec())
+                        }
+                    })
+                    .collect(),
+            ),
             _ => None,
         };
         let regex = match pattern {
@@ -246,6 +260,7 @@ impl Compiled {
             ci,
             needles,
             regex,
+            set,
             range,
             text_lo,
             text_hi,
@@ -302,24 +317,22 @@ impl Compiled {
             }
             Op::IsBlank => cell.iter().all(u8::is_ascii_whitespace),
             Op::IsNotBlank => !cell.iter().all(u8::is_ascii_whitespace),
-            Op::In(v) => {
-                !v.is_empty()
-                    && if ci {
-                        re(cell)
-                    } else {
-                        self.needles.iter().any(|n| cell == n.as_slice())
-                    }
-            }
-            Op::NotIn(v) => {
-                v.is_empty()
-                    || !(if ci {
-                        re(cell)
-                    } else {
-                        self.needles.iter().any(|n| cell == n.as_slice())
-                    })
-            }
+            Op::In(_) => self.in_set(cell),
+            Op::NotIn(_) => !self.in_set(cell),
             Op::Regex(_) => re(cell),
             Op::Gt(_) | Op::Ge(_) | Op::Lt(_) | Op::Le(_) | Op::Between(..) => self.in_range(cell),
+        }
+    }
+
+    fn in_set(&self, cell: &[u8]) -> bool {
+        let Some(set) = &self.set else { return false };
+        if set.is_empty() {
+            return false;
+        }
+        if self.ci {
+            fold_simple(cell).is_some_and(|f| set.contains(&f))
+        } else {
+            set.contains(cell)
         }
     }
 
@@ -425,6 +438,9 @@ impl Compiled {
     /// quote). `None` = scan every row.
     fn prefilter(&self) -> Option<Regex> {
         let lits: Vec<Vec<u8>> = match &self.op {
+            // A case-insensitive alternation of many values is slow to
+            // build and run: scan every row (hash lookups) instead.
+            Op::In(v) if self.ci && v.len() > IN_PREFILTER_MAX => return None,
             Op::Equals(_) | Op::Contains(_) | Op::BeginsWith(_) | Op::EndsWith(_) | Op::In(_) => {
                 self.needles.clone()
             }
@@ -452,6 +468,45 @@ impl Compiled {
             _ => return None,
         })
     }
+}
+
+/// Largest case-insensitive `in` list searched with a literal prefilter.
+const IN_PREFILTER_MAX: usize = 32;
+
+/// Canonical form of `b` under Unicode simple case folding (each character
+/// replaced by the smallest member of its folding orbit: `k`, `K` and the
+/// Kelvin sign all become `K`), so two strings are equal case-insensitively
+/// exactly when the regex crate's `(?i)` literal match says so (D-012).
+/// None when `b` is not UTF-8 (it cannot equal a UTF-8 value then).
+fn fold_simple(b: &[u8]) -> Option<Vec<u8>> {
+    if b.is_ascii() {
+        return Some(b.to_ascii_uppercase());
+    }
+    let s = std::str::from_utf8(b).ok()?;
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        out.push(if c.is_ascii() {
+            c.to_ascii_uppercase()
+        } else {
+            fold_char(c)
+        });
+    }
+    Some(out.into_bytes())
+}
+
+fn fold_char(c: char) -> char {
+    use regex_syntax::hir::{ClassUnicode, ClassUnicodeRange};
+    thread_local! {
+        static CACHE: std::cell::RefCell<rustc_hash::FxHashMap<char, char>> =
+            Default::default();
+    }
+    CACHE.with(|m| {
+        *m.borrow_mut().entry(c).or_insert_with(|| {
+            let mut cls = ClassUnicode::new([ClassUnicodeRange::new(c, c)]);
+            cls.case_fold_simple();
+            cls.ranges().first().map_or(c, |r| r.start())
+        })
+    })
 }
 
 /// Prefilter regex from literals: `None` when a literal could be spelled
