@@ -4,7 +4,10 @@ name: Release
 # hand (Actions minutes are limited: D-017). A manual run without a tag is a
 # dry run: everything is built and packaged, nothing is published.
 #   Linux x86_64: .tar.gz + .AppImage
-#   macOS arm64 (Apple Silicon only, D-018): .dmg with forhunt-viewer.app
+#   macOS arm64 (Apple Silicon only, D-018): .dmg with forhunt-viewer.app,
+#     built on the owner's Mac by scripts/release-macos-local.sh and added to
+#     the release (macOS runners cost 10x minutes, D-031); the macOS job runs
+#     only on a manual run with "macos" ticked
 #   Windows x86_64: .msi (Open with entries) + portable .zip
 # Each file gets a .sha256; SHA256SUMS lists them all.
 
@@ -17,6 +20,10 @@ on:
         description: "Tag to publish from the selected branch head, e.g. v0.1.0 (created if missing). Empty: dry run"
         required: false
         default: ""
+      macos:
+        description: "Also build the macOS .dmg on a runner (10x minutes; normally built locally, D-031)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,10 +39,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        include:
-          - { name: linux-x86_64, os: ubuntu-22.04 }
-          - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin }
-          - { name: windows-x86_64, os: windows-latest }
+        include: ${{ fromJSON(inputs.macos && '[{"name":"linux-x86_64","os":"ubuntu-22.04"},{"name":"macos-arm64","os":"macos-14","target":"aarch64-apple-darwin"},{"name":"windows-x86_64","os":"windows-latest"}]' || '[{"name":"linux-x86_64","os":"ubuntu-22.04"},{"name":"windows-x86_64","os":"windows-latest"}]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -139,4 +143,4 @@ jobs:
         run: |
           pre=""; case "$TAG" in *-*) pre="--prerelease";; esac
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "forhunt-viewer $TAG" $pre --notes "Unsigned builds (macOS: right-click > Open; Windows: More info > Run anyway). See README for install and Open With setup. SHA-256 of every file in SHA256SUMS."
+            --title "forhunt-viewer $TAG" $pre --notes "Unsigned builds. macOS (Apple Silicon): first launch is blocked; open System Settings > Privacy & Security > Open Anyway (or see the README). Windows: More info > Run anyway. See README for install and Open With setup. SHA-256 of every file in SHA256SUMS."

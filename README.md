@@ -100,9 +100,13 @@ page. Each file has a `.sha256`, and `SHA256SUMS` lists them all.
 The builds are **not code-signed** (no Apple Developer ID or Windows
 certificate yet):
 
-- **macOS.** Drag the app to Applications. The first time, right-click it
-  and choose *Open*, then confirm. Alternatively:
+- **macOS (Apple Silicon).** Drag the app to Applications. The app is not
+  notarized, so the first launch is blocked ("Apple could not verify..."):
+  open *System Settings > Privacy & Security*, click *Open Anyway* next to
+  the forhunt-viewer message and confirm (macOS 15 and later no longer offer
+  right-click > *Open* for this). Alternatively, after checking the SHA-256:
   `xattr -dr com.apple.quarantine /Applications/forhunt-viewer.app`.
+  Intel Macs: build from source (below).
 - **Windows.** SmartScreen may warn: *More info > Run anyway*.
 - **Linux.** `chmod +x forhunt-viewer-*.AppImage`. The tarball holds the
   binary, a `.desktop` file and an icon.
