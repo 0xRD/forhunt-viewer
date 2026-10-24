@@ -148,7 +148,14 @@ fn run(
     }
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
     total.store(o.bytes.max(1), Ordering::Relaxed);
-    let tmp = out_dir.join(".partial.csv");
+    // Unique per conversion: the same evidence may be converting twice at
+    // once (dropped again while the first parse runs).
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let tmp = out_dir.join(format!(
+        ".partial-{}-{}.csv",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
     let f = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
     let mut w = BufWriter::with_capacity(1 << 20, f);
     let map = forhunt_core::normalize::FieldMap::default_map();
@@ -170,7 +177,13 @@ fn run(
             });
         }
     };
-    std::fs::rename(&tmp, &csv).map_err(|e| format!("{}: {e}", csv.display()))?;
+    if csv.is_file() {
+        // Another conversion of the same inputs finished first: its CSV is
+        // the same bytes and may already be open; keep it.
+        let _ = std::fs::remove_file(&tmp);
+    } else {
+        std::fs::rename(&tmp, &csv).map_err(|e| format!("{}: {e}", csv.display()))?;
+    }
     let mut warnings = o.warnings;
     if stats.bad_units > 0 || stats.bad_records > 0 {
         warnings.push(format!(
@@ -304,6 +317,42 @@ mod tests {
         let again = wait(&Conversion::start(vec![FIXTURE.into()], cache.path())).unwrap();
         assert!(again.cached);
         assert_eq!(again.csv, done.csv);
+    }
+
+    /// The same evidence opened twice at once (dropped again, Open recent
+    /// while the first parse runs): every conversion succeeds with the
+    /// complete CSV. They used to share one `.partial.csv`: the later ones
+    /// truncated the file the first had just published, then failed to
+    /// rename it.
+    #[test]
+    fn concurrent_conversions_of_the_same_input() {
+        let cache = tempfile::tempdir().unwrap();
+        let want = {
+            let solo = tempfile::tempdir().unwrap();
+            let d = wait(&Conversion::start(vec![FIXTURE.into()], solo.path())).unwrap();
+            std::fs::read(d.csv).unwrap()
+        };
+        for _ in 0..5 {
+            let _ = std::fs::remove_dir_all(cache.path().join("forhunt"));
+            let cs: Vec<Conversion> = (0..4)
+                .map(|_| Conversion::start(vec![FIXTURE.into()], cache.path()))
+                .collect();
+            for c in &cs {
+                let d = wait(c).unwrap();
+                assert_eq!(std::fs::read(&d.csv).unwrap(), want);
+            }
+        }
+        // No temporary file left behind.
+        let dir = std::fs::read_dir(cache.path().join("forhunt"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["PowerShell.evtx.csv"]);
     }
 
     #[test]
