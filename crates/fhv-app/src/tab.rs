@@ -34,11 +34,62 @@ pub struct ColFilter {
     /// Conditions combine with OR instead of AND.
     pub any: bool,
     pub case_sensitive: bool,
+    /// Value-list selection (`in` / `not in` of dictionary values, or
+    /// "= / ≠ this value" from a cell). Matched exactly (case and spaces
+    /// count) whatever `case_sensitive` says: the list names values that
+    /// differ only by case separately. ANDed with the other conditions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Op>,
 }
 
 impl ColFilter {
     pub fn is_active(&self) -> bool {
-        !self.quick.is_empty() || !self.conds.is_empty()
+        !self.quick.is_empty() || !self.conds.is_empty() || self.values.is_some()
+    }
+
+    /// Whether the value-list selection keeps value `v`.
+    pub fn keeps_value(&self, v: &str) -> bool {
+        match &self.values {
+            Some(Op::In(vs)) => vs.iter().any(|x| x == v),
+            Some(Op::NotIn(vs)) => !vs.iter().any(|x| x == v),
+            _ => true,
+        }
+    }
+
+    /// Value-list selection from the ticked values of the full list (the
+    /// shorter of `in` / `not in`; none when everything is ticked).
+    pub fn set_values<'a>(&mut self, all: impl IntoIterator<Item = (&'a str, bool)>) {
+        let (mut on, mut off) = (Vec::new(), Vec::new());
+        for (v, keep) in all {
+            if keep { &mut on } else { &mut off }.push(v.to_string());
+        }
+        self.values = if off.is_empty() {
+            None
+        } else if on.len() <= off.len() {
+            Some(Op::In(on))
+        } else {
+            Some(Op::NotIn(off))
+        };
+    }
+
+    /// "= this value" (keep only `v`) or "≠ this value" (drop `v`), on top
+    /// of the current value selection.
+    pub fn filter_value(&mut self, v: String, exclude: bool) {
+        let kept = self.keeps_value(&v);
+        self.values = Some(match (exclude, self.values.take()) {
+            (false, _) => Op::In(if kept { vec![v] } else { Vec::new() }),
+            (true, Some(Op::In(mut vs))) => {
+                vs.retain(|x| *x != v);
+                Op::In(vs)
+            }
+            (true, Some(Op::NotIn(mut vs))) => {
+                if kept {
+                    vs.push(v);
+                }
+                Op::NotIn(vs)
+            }
+            (true, _) => Op::NotIn(vec![v]),
+        });
     }
 }
 
@@ -255,6 +306,13 @@ impl Tab {
             if !f.conds.is_empty() {
                 let xs: Vec<Expr> = f.conds.iter().cloned().map(pred).collect();
                 all.push(if f.any { Expr::Or(xs) } else { Expr::And(xs) });
+            }
+            if let Some(op) = &f.values {
+                all.push(Expr::Pred(Pred {
+                    target: Target::Column(c),
+                    op: op.clone(),
+                    case_sensitive: true,
+                }));
             }
         }
         if self.search_filter && !self.search.is_empty() {

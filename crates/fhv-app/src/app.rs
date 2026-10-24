@@ -705,6 +705,14 @@ impl App {
                             remove = Some((c, Some(i)));
                         }
                     }
+                    if let Some(op) = &f.values
+                        && ui
+                            .button(format!("{name} {}  ×", op_text(op)))
+                            .on_hover_text("remove (exact values)")
+                            .clicked()
+                    {
+                        remove = Some((c, Some(usize::MAX)));
+                    }
                 }
                 if !t.sort.is_empty() {
                     let s: Vec<String> = t
@@ -725,6 +733,7 @@ impl App {
         if let Some((c, i)) = remove {
             match i {
                 None => t.filters[c].quick.clear(),
+                Some(usize::MAX) => t.filters[c].values = None,
                 Some(i) => {
                     t.filters[c].conds.remove(i);
                 }
@@ -1163,10 +1172,9 @@ impl App {
                     if let Some(r) = t.view.row_at(row)
                         && let Ok(f) = t.table.row_fields(r as u64)
                     {
+                        // Exactly this value (not its case variants).
                         let v = f.get(c).cloned().unwrap_or_default();
-                        t.filters[c]
-                            .conds
-                            .push(if neg { Op::NotEquals(v) } else { Op::Equals(v) });
+                        t.filters[c].filter_value(v, neg);
                         t.requery();
                     }
                 }
@@ -1240,18 +1248,8 @@ impl App {
             && let Some(ci) = t.table.column_index()
         {
             if let Some(v) = value_counts(&ci, c, Some(&t.view.rows)) {
-                let cond = t.filters[c]
-                    .conds
-                    .iter()
-                    .find(|o| matches!(o, Op::In(_) | Op::NotIn(_)));
-                fe.checked = v
-                    .iter()
-                    .map(|(val, _)| match cond {
-                        Some(Op::In(vs)) => vs.iter().any(|x| x == val),
-                        Some(Op::NotIn(vs)) => !vs.iter().any(|x| x == val),
-                        _ => true,
-                    })
-                    .collect();
+                let f = &t.filters[c];
+                fe.checked = v.iter().map(|(val, _)| f.keeps_value(val)).collect();
                 fe.values = Some(v);
             } else {
                 fe.values = Some(Vec::new());
@@ -1270,6 +1268,18 @@ impl App {
             .default_width(400.0)
             .show(ctx, |ui| {
                 let f = &mut t.filters[c];
+                if let Some(op) = &f.values {
+                    let mut del = false;
+                    ui.horizontal(|ui| {
+                        ui.label(format!("values {}", op_text(op)));
+                        del = ui.small_button("×").clicked();
+                    });
+                    if del {
+                        f.values = None;
+                        fe.values = None;
+                        changed = true;
+                    }
+                }
                 if !f.conds.is_empty() {
                     let mut del = None;
                     for (i, op) in f.conds.iter().enumerate() {
@@ -1383,15 +1393,8 @@ impl App {
                             }
                         });
                         if ui.button("Apply value selection").clicked() {
-                            f.conds.retain(|o| !matches!(o, Op::In(_) | Op::NotIn(_)));
-                            let on: Vec<String> =
-                                values.iter().zip(&fe.checked).filter(|(_, c)| **c).map(|(v, _)| v.0.clone()).collect();
-                            let off: Vec<String> =
-                                values.iter().zip(&fe.checked).filter(|(_, c)| !**c).map(|(v, _)| v.0.clone()).collect();
-                            if !off.is_empty() {
-                                // The shorter list selects the same rows.
-                                f.conds.push(if on.len() <= off.len() { Op::In(on) } else { Op::NotIn(off) });
-                            }
+                            // Exact values: the shorter list selects the same rows.
+                            f.set_values(values.iter().zip(&fe.checked).map(|(v, c)| (v.0.as_str(), *c)));
                             changed = true;
                         }
                     }

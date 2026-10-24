@@ -34,6 +34,9 @@ pub struct ColFilterSer {
     pub conds: Vec<Op>,
     pub any: bool,
     pub case_sensitive: bool,
+    /// Exact value-list selection (absent in sessions of 0.2.1 and older).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Op>,
 }
 
 pub fn capture(tab: &Tab) -> Session {
@@ -62,6 +65,7 @@ pub fn capture(tab: &Tab) -> Session {
                         conds: f.conds.clone(),
                         any: f.any,
                         case_sensitive: f.case_sensitive,
+                        values: f.values.clone(),
                     },
                 )
             })
@@ -113,6 +117,7 @@ pub fn apply(tab: &mut Tab, s: &Session) -> Vec<String> {
                 conds: f.conds.clone(),
                 any: f.any,
                 case_sensitive: f.case_sensitive,
+                values: f.values.clone(),
             };
         }
     }

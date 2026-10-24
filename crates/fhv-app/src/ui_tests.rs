@@ -256,3 +256,106 @@ fn guards_and_formatting() {
     );
     assert!(pj("{not json").is_none());
 }
+
+fn case_variants(dir: &Path) -> std::path::PathBuf {
+    let p = dir.join("users.csv");
+    let mut s = String::from("n,User\n");
+    for i in 0..1000u32 {
+        s.push_str(&format!(
+            "{i},{}\n",
+            ["Admin", "admin", "ADMIN", "bob"][(i % 4) as usize]
+        ));
+    }
+    std::fs::write(&p, s).unwrap();
+    p
+}
+
+/// The value list selects exactly the ticked values, also when values differ
+/// only by case and the column filter is case-insensitive (the default):
+/// ticking "admin" used to show "Admin" and "ADMIN" too, and unticking
+/// "ADMIN" hid all three.
+#[test]
+fn value_list_selects_exact_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = case_variants(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    assert!(!h.state().tabs[0].filters[1].case_sensitive);
+    let users = |a: &App| -> Vec<String> {
+        let t = &a.tabs[0];
+        let mut v: Vec<String> = t
+            .view
+            .iter()
+            .map(|r| t.table.row_fields(r as u64).unwrap()[1].clone())
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+
+    // Only "admin" ticked.
+    h.state_mut().open_filter_editor(1);
+    h.run_steps(3);
+    h.get_by_label("none").click();
+    h.step();
+    h.get_by_label("admin   (250)").click();
+    h.step();
+    h.get_by_label("Apply value selection").click();
+    h.step();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() != 1000);
+    assert_eq!(users(h.state()), ["admin"]);
+    assert_eq!(h.state().tabs[0].view.len(), 250);
+
+    // Everything but "ADMIN" (a "not in" list, the shorter one).
+    h.state_mut().tabs[0].filters[1] = Default::default();
+    h.state_mut().tabs[0].requery();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 1000);
+    h.state_mut().open_filter_editor(1);
+    h.run_steps(3);
+    h.get_by_label("ADMIN   (250)").click();
+    h.step();
+    h.get_by_label("Apply value selection").click();
+    h.step();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() != 1000);
+    assert_eq!(users(h.state()), ["Admin", "admin", "bob"]);
+    assert_eq!(h.state().tabs[0].view.len(), 750);
+}
+
+/// "≠ this value" from a cell drops exactly that value (not its case
+/// variants: excluding "admin" used to hide "Admin" and "ADMIN" too), and
+/// "= this value" narrows the selection; sessions keep the selection.
+#[test]
+fn cell_value_filters_are_exact_and_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = case_variants(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    h.state_mut().tabs[0].filters[1].filter_value("admin".into(), true);
+    h.state_mut().tabs[0].requery();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() != 1000);
+    assert_eq!(h.state().tabs[0].view.len(), 750);
+    assert!(h.state().tabs[0].view.iter().all(|r| r % 4 != 1));
+    h.state_mut().tabs[0].filters[1].filter_value("bob".into(), true);
+    h.state_mut().tabs[0].requery();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() != 750);
+    assert_eq!(h.state().tabs[0].view.len(), 500);
+
+    let s = crate::session::capture(&h.state().tabs[0]);
+    let json = serde_json::to_string(&s).unwrap();
+    let s2: crate::session::Session = serde_json::from_str(&json).unwrap();
+    let t = &mut h.state_mut().tabs[0];
+    t.filters[1] = Default::default();
+    crate::session::apply(t, &s2);
+    assert_eq!(
+        t.filters[1].values,
+        Some(Op::NotIn(vec!["admin".into(), "bob".into()]))
+    );
+
+    // "= ADMIN" on top: only ADMIN; "= bob" then: nothing (bob is excluded).
+    h.state_mut().tabs[0].filters[1].filter_value("ADMIN".into(), false);
+    h.state_mut().tabs[0].requery();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 250);
+    assert!(h.state().tabs[0].view.iter().all(|r| r % 4 == 2));
+    h.state_mut().tabs[0].filters[1].filter_value("bob".into(), false);
+    assert_eq!(h.state().tabs[0].filters[1].values, Some(Op::In(vec![])));
+}
