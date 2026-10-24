@@ -115,17 +115,41 @@ pub fn display_text(s: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// Byte ranges of case-insensitive (ASCII folding) matches of `needle`.
-pub fn find_all(hay: &str, needle_lower: &str) -> Vec<Range<usize>> {
-    if needle_lower.is_empty() {
+pub fn find_all(hay: &str, needle: &str) -> Vec<Range<usize>> {
+    // Simple per-character case folding (the search matches with Unicode
+    // case folding, so non-ASCII hits must highlight too).
+    fn fold(c: char) -> char {
+        let mut l = c.to_lowercase();
+        match (l.next(), l.next()) {
+            (Some(x), None) => x,
+            _ => c,
+        }
+    }
+    if needle.is_empty() {
         return Vec::new();
     }
-    let lower = hay.to_ascii_lowercase();
+    if hay.is_ascii() && needle.is_ascii() {
+        let (lower, n) = (hay.to_ascii_lowercase(), needle.to_ascii_lowercase());
+        let mut out = Vec::new();
+        let mut from = 0;
+        while let Some(p) = lower[from..].find(&n) {
+            out.push(from + p..from + p + n.len());
+            from += p + n.len();
+        }
+        return out;
+    }
+    let n: Vec<char> = needle.chars().map(fold).collect();
+    let h: Vec<(usize, char)> = hay.char_indices().map(|(i, c)| (i, fold(c))).collect();
+    let end = |k: usize| h.get(k).map_or(hay.len(), |x| x.0);
     let mut out = Vec::new();
-    let mut from = 0;
-    while let Some(p) = lower[from..].find(needle_lower) {
-        let s = from + p;
-        out.push(s..s + needle_lower.len());
-        from = s + needle_lower.len().max(1);
+    let mut k = 0;
+    while k + n.len() <= h.len() {
+        if h[k..k + n.len()].iter().map(|x| x.1).eq(n.iter().copied()) {
+            out.push(h[k].0..end(k + n.len()));
+            k += n.len();
+        } else {
+            k += 1;
+        }
     }
     out
 }
@@ -383,7 +407,7 @@ pub fn show(
     let sel_fill = visuals.selection.bg_fill;
     let hl_fill = Color32::from_rgba_unmultiplied(255, 200, 0, 90);
     let grid_line = Stroke::new(1.0, sep.color.gamma_multiply(0.5));
-    let needle = highlight.to_ascii_lowercase();
+    let needle = highlight;
     for k in 0..count {
         let row = first + k;
         let y = body.min.y - offset + k as f32 * st.row_h;
@@ -417,7 +441,7 @@ pub fn show(
             let galley = p.layout_no_wrap(text.to_string(), st.font.clone(), text_color);
             let origin = Pos2::new(cell.min.x + st.pad, cell.center().y - galley.size().y / 2.0);
             if !needle.is_empty() {
-                for m in find_all(&text, &needle) {
+                for m in find_all(&text, needle) {
                     let a = galley.pos_from_cursor(eframe::egui::text::CCursor::new(
                         text[..m.start].chars().count(),
                     ));
@@ -585,5 +609,10 @@ mod tests {
     fn find_all_case_insensitive() {
         assert_eq!(find_all("Abc abc", "abc"), vec![0..3, 4..7]);
         assert!(find_all("x", "").is_empty());
+        // Non-ASCII letters fold too, like the search itself (the row was a
+        // hit but nothing was highlighted).
+        assert_eq!(find_all("AUTORITÉ NT\\Système", "autorité"), vec![0..9]);
+        assert_eq!(find_all("SYSTÈME", "Système"), vec![0..8]);
+        assert_eq!(find_all("ÉCHEC échec", "ÉCHEC"), vec![0..6, 7..13]);
     }
 }
