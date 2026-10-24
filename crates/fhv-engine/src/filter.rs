@@ -19,7 +19,8 @@
 //! prefilter, so the prefilter can never miss a match); a missing
 //! field (short row) is an empty string; `>`/`<`/between compare as times
 //! when the column is a time column and the operand parses as one, else as
-//! numbers when both sides parse, else case-insensitively as text; cells that
+//! numbers when both sides parse, else case-insensitively as text (on a
+//! time column, an operand that is not a time is an error: D-036); cells that
 //! do not parse in a time/number comparison do not match. An inclusive upper
 //! time bound (`<=`, the end of `between`) covers the whole period written:
 //! `between 2024-03-01 and 2024-03-01` is that day (D-034).
@@ -227,6 +228,30 @@ impl Compiled {
             }
             parse_number(s.as_bytes()).map(Bound::Num)
         };
+        // On a time column a range operand must be a date-time: a number
+        // or text comparison of times silently returns nothing or nonsense
+        // (`>= 2025`, a day-first date on a month-first column).
+        if let Some(o) = order {
+            let operands: Vec<&String> = match op {
+                Op::Gt(v) | Op::Ge(v) | Op::Lt(v) | Op::Le(v) => vec![v],
+                Op::Between(a, b) => vec![a, b],
+                _ => Vec::new(),
+            };
+            if let Some(v) = operands
+                .into_iter()
+                .find(|v| time::parse(v.as_bytes(), o).is_none())
+            {
+                let own = match o {
+                    Order::Mdy => ", 3/11/2024 10:00 AM",
+                    Order::Dmy => ", 11/3/2024 10:00",
+                    Order::Ymd => "",
+                };
+                return Err(Error::Other(format!(
+                    "{v:?} is not a date-time for this time column: use e.g. 2024-03-11, \
+                     2024-03-11 10:00:00, 2024-03-11T10:00:00Z{own}"
+                )));
+            }
+        }
         let (range, text_lo, text_hi) = match op {
             Op::Gt(v) => (
                 Some((bound(v, false), None, false, true)),
@@ -586,7 +611,16 @@ impl Engine {
         match expr {
             Expr::And(xs) | Expr::Or(xs) => xs.iter().try_for_each(|x| self.validate(x)),
             Expr::Not(x) => self.validate(x),
-            Expr::Pred(p) => Compiled::new(&p.op, p.case_sensitive, Kind::Text).map(|_| ()),
+            Expr::Pred(p) => {
+                // With the column's kind: a time column checks its range
+                // operands (D-036) even when an AND term before it already
+                // matches nothing.
+                let kind = match (&p.target, self.table.column_index()) {
+                    (Target::Column(c), Some(ci)) => ci.cols.get(*c).map_or(Kind::Text, |x| x.kind),
+                    _ => Kind::Text,
+                };
+                Compiled::new(&p.op, p.case_sensitive, kind).map(|_| ())
+            }
             Expr::Rows(_) => Ok(()),
         }
     }
@@ -768,7 +802,10 @@ impl Engine {
         let per_col: Vec<Compiled> = (0..self.table.columns.len())
             .map(|c| {
                 let kind = cols.as_ref().map_or(Kind::Text, |ci| ci.cols[c].kind);
+                // Any column: an operand that is not a time compares the
+                // time columns as text rather than failing the search.
                 Compiled::new(&p.op, p.case_sensitive, kind)
+                    .or_else(|_| Compiled::new(&p.op, p.case_sensitive, Kind::Text))
             })
             .collect::<Result<_>>()?;
         if cp.is_negative()

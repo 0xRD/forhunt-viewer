@@ -10,3 +10,4 @@ cc db414aee1cf03dd2c857633e8697bf8720ccb936cb7c55df8dceb13f50a905aa # shrinks to
 cc f7c2610e74cfa7f768460b54e8515aee173158ecc389ab5ca9a83ea68d5c0a5d # shrinks to keys = [(4, false), (0, false)], filt = None
 cc ec4350a0a9e8c9a4bc8f6000bfe87ffeeb7a276442c006f2213108002c82a60f # shrinks to e = And([Pred(Pred { target: Any, op: Le("2024-03-01 00:00:00"), case_sensitive: false })])
 cc 86f2490abf6923c3083077bc33f6225e62302dff5afddd675d36f4dc52089fd8 # shrinks to e = And([Pred(Pred { target: Column(0), op: Le("alpha"), case_sensitive: true })])
+cc 8fecf1a3cef353c496833a777a0d463a1f24b7e6e1cc8e90855f531bc21666fd # shrinks to e = Not(Pred(Pred { target: Column(3), op: Le("alpha"), case_sensitive: false }))

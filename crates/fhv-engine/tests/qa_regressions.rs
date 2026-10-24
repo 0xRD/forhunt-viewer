@@ -307,3 +307,52 @@ fn large_case_insensitive_in_lists() {
         assert_eq!(eq, one, "{v}");
     }
 }
+
+/// On a time column, a range operand that is not a date-time this column
+/// understands is an error, not a silent number / text comparison:
+/// `>= 2025` matched nothing (cells are not numbers), and a day-first date
+/// on a month-first column compared as text.
+#[test]
+fn time_ranges_reject_operands_that_are_not_times() {
+    let mut csv = String::from("TimeCreated,Seen\n");
+    for i in 0..40 {
+        csv.push_str(&format!(
+            "2025-10-{:02} 10:00:00,10/{:02}/2025 1:00 PM\n",
+            i % 28 + 1,
+            i % 28 + 1
+        ));
+    }
+    let fx = open(&csv);
+    let ci = fx.engine.table().column_index().unwrap();
+    assert_eq!(
+        ci.cols[1].kind,
+        fhv_engine::columns::Kind::Time(fhv_engine::time::Order::Mdy)
+    );
+    let eval = |c: usize, op: Op| {
+        fx.engine.eval(&Expr::Pred(Pred {
+            target: Target::Column(c),
+            op,
+            case_sensitive: false,
+        }))
+    };
+    for (c, op) in [
+        (0, Op::Ge("2025".into())),
+        (0, Op::Lt("yesterday".into())),
+        (0, Op::Between("2025-10-01".into(), "10/32/2025".into())),
+        (1, Op::Le("21/10/2025".into())),
+        (1, Op::Gt("5".into())),
+    ] {
+        let e = eval(c, op.clone()).expect_err(&format!("{op:?} on column {c}"));
+        assert!(e.to_string().contains("date"), "{e}");
+    }
+    // Valid operands, in either the ISO or the column's own format.
+    assert_eq!(
+        eval(1, Op::Le("10/02/2025 1:00 PM".into())).unwrap().len(),
+        4
+    );
+    assert_eq!(eval(1, Op::Le("2025-10-02".into())).unwrap().len(), 4);
+    // Blank operands are no bound for the UI, but still not text: error.
+    assert!(eval(0, Op::Gt(String::new())).is_err());
+    // Text operators on time columns are unchanged.
+    assert_eq!(eval(0, Op::Contains("2025-10-0".into())).unwrap().len(), 18);
+}

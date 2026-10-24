@@ -290,6 +290,24 @@ fn naive_pred(p: &Pred, r: &[String]) -> bool {
     }
 }
 
+/// A range operand on the time column that is not a time is an error
+/// (D-036).
+fn naive_error(e: &Expr) -> bool {
+    match e {
+        Expr::And(xs) | Expr::Or(xs) => xs.iter().any(naive_error),
+        Expr::Not(x) => naive_error(x),
+        Expr::Pred(p) => {
+            p.target == Target::Column(3)
+                && match &p.op {
+                    Op::Gt(v) | Op::Ge(v) | Op::Lt(v) | Op::Le(v) => parse_time(v).is_none(),
+                    Op::Between(a, b) => parse_time(a).is_none() || parse_time(b).is_none(),
+                    _ => false,
+                }
+        }
+        Expr::Rows(_) => false,
+    }
+}
+
 fn naive(e: &Expr, r: &[String]) -> bool {
     match e {
         Expr::And(xs) => xs.iter().all(|x| naive(x, r)),
@@ -396,6 +414,11 @@ proptest! {
     #[test]
     fn filters_equal_naive(e in expr()) {
         FIX.with(|f| {
+            if naive_error(&e) {
+                prop_assert!(f.engine.validate(&e).is_err(), "{:?}", e);
+                return Ok(());
+            }
+            f.engine.validate(&e).unwrap();
             let got: Vec<u32> = f.engine.eval(&e).unwrap().iter().collect();
             let want: Vec<u32> = f.rows.iter().enumerate().filter(|(_, r)| naive(&e, r)).map(|(i, _)| i as u32).collect();
             prop_assert_eq!(got, want, "{:?}", e);
@@ -408,8 +431,8 @@ proptest! {
         FIX.with(|f| {
             let keys: Vec<SortKey> = keys.into_iter().map(|(col, desc)| SortKey { col, desc }).collect();
             let rows = match &filt {
-                Some(p) => f.engine.eval(&Expr::Pred(p.clone())).unwrap(),
-                None => (0..f.rows.len() as u32).collect(),
+                Some(p) if !naive_error(&Expr::Pred(p.clone())) => f.engine.eval(&Expr::Pred(p.clone())).unwrap(),
+                _ => (0..f.rows.len() as u32).collect(),
             };
             let got = sort(f.engine.table(), &rows, &keys).unwrap();
             let mut want: Vec<u32> = rows.iter().collect();
