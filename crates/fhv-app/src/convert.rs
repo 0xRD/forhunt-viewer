@@ -127,13 +127,24 @@ fn run(
         };
         return Err(why);
     }
-    // Same files (by forhunt's content key and path), same forhunt: same CSV.
+    // Same files (by forhunt's content key, path, size and modification
+    // time), same forhunt: same CSV.
     let mut h = blake3::Hasher::new();
     h.update(FORHUNT_VERSION.as_bytes());
     for s in &o.sources {
         h.update(s.key().to_string().as_bytes());
         h.update(s.path().as_os_str().as_encoded_bytes());
         h.update(&[0]);
+        let (len, mtime) = std::fs::metadata(s.path()).map_or((0, 0), |m| {
+            let t = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            (m.len(), t)
+        });
+        h.update(&len.to_le_bytes());
+        h.update(&mtime.to_le_bytes());
     }
     let key = h.finalize().to_hex();
     let out_dir = dir.join(&key.as_str()[..16]);
@@ -353,6 +364,31 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["PowerShell.evtx.csv"]);
+    }
+
+    /// The conversion cache key includes each file's size and modification
+    /// time, not only forhunt's sampled content key: an evidence file
+    /// replaced in place (same sampled head and tail) is parsed again.
+    #[test]
+    fn conversion_cache_follows_size_and_mtime() {
+        let d = tempfile::tempdir().unwrap();
+        let evtx = d.path().join("PowerShell.evtx");
+        std::fs::copy(FIXTURE, &evtx).unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let first = wait(&Conversion::start(vec![evtx.clone()], cache.path())).unwrap();
+        assert!(!first.cached);
+        assert!(
+            wait(&Conversion::start(vec![evtx.clone()], cache.path()))
+                .unwrap()
+                .cached
+        );
+        let f = std::fs::File::options().write(true).open(&evtx).unwrap();
+        f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+            .unwrap();
+        drop(f);
+        let again = wait(&Conversion::start(vec![evtx], cache.path())).unwrap();
+        assert!(!again.cached, "same content key, new mtime: parsed again");
+        assert_ne!(again.csv, first.csv);
     }
 
     #[test]
