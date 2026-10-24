@@ -394,13 +394,7 @@ impl Tab {
             self.status = Some("busy: wait for the current operation".into());
             return;
         }
-        // The rows shown must be those of the filter and sort shown.
-        if self.pending || self.last_query.as_ref() != Some(&self.query()) {
-            self.status = Some(
-                "not exported: the current filter / sort is not applied yet or failed; \
-                 wait for it (or fix it), then export"
-                    .into(),
-            );
+        if !self.view_is_current("not exported") {
             return;
         }
         let t = self.table.clone();
@@ -431,11 +425,28 @@ impl Tab {
         });
     }
 
+    /// True when the rows shown are the result of the filter and sort
+    /// shown (not a typing pause, not a failed or cancelled query); else
+    /// says why `what` did not happen.
+    fn view_is_current(&mut self, what: &str) -> bool {
+        if self.pending || self.last_query.as_ref() != Some(&self.query()) {
+            self.status = Some(format!(
+                "{what}: the current filter / sort is not applied yet or failed; \
+                 wait for it (or fix it), then try again"
+            ));
+            return false;
+        }
+        true
+    }
+
     /// Copies the values of file column `c` in the view (first 1 M rows),
     /// one per line, in the background.
     pub fn start_copy_column(&mut self, c: usize) {
         if self.job.is_some() || !self.ready() {
             self.status = Some("busy: wait for the current operation".into());
+            return;
+        }
+        if !self.view_is_current("not copied") {
             return;
         }
         const MAX: usize = 1_000_000;

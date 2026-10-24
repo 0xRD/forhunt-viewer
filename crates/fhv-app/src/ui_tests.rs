@@ -498,6 +498,8 @@ fn export_refuses_a_view_that_is_not_the_current_filter() {
         fhv_engine::export::Format::Csv,
     );
     assert!(t.job.is_none() && !out.exists(), "exported a stale view");
+    t.start_copy_column(2);
+    assert!(t.job.is_none(), "copied a stale view");
     wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 250);
     // Applied: the export holds exactly the filtered rows.
     h.state_mut().tabs[0].start_export(
