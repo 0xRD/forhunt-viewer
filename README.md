@@ -114,7 +114,7 @@ certificate yet):
 - **Linux.** `chmod +x forhunt-viewer-*.AppImage`. The tarball holds the
   binary, a `.desktop` file and an icon.
 
-A Homebrew cask (`0xrd/homebrew-tap`) will follow.
+Homebrew (Apple Silicon): `brew install --cask 0xrd/tap/forhunt-viewer`.
 
 From source (Rust 1.97; the toolchain is pinned in `rust-toolchain.toml`):
 

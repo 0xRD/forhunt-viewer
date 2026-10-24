@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds the Apple Silicon .dmg on this Mac and adds it to an existing GitHub
 # release (D-031): the tag's Release run publishes Linux and Windows only.
+# Then points the Homebrew cask in 0xRD/homebrew-tap at the new .dmg.
 # usage: scripts/release-macos-local.sh vX.Y.Z
 set -euo pipefail
 TAG="${1:?usage: release-macos-local.sh vX.Y.Z}"
@@ -26,3 +27,15 @@ gh release download "$TAG" -R "$REPO" -p SHA256SUMS -D "$work"
 mv "$work/SUMS" "$work/SHA256SUMS"
 gh release upload "$TAG" -R "$REPO" --clobber "dist/$DMG" "dist/$DMG.sha256" "$work/SHA256SUMS"
 gh release view "$TAG" -R "$REPO" --json assets -q '.assets[].name'
+
+# Homebrew cask (pre-releases stay out of the tap).
+case "$VER" in *-*) exit 0 ;; esac
+SHA="$(cut -d' ' -f1 "dist/$DMG.sha256")"
+gh repo clone 0xRD/homebrew-tap "$work/tap" -- --depth 1 -q
+CASK="$work/tap/Casks/forhunt-viewer.rb"
+sed -i '' -e "s/^  version \".*\"$/  version \"$VER\"/" -e "s/^  sha256 \".*\"$/  sha256 \"$SHA\"/" "$CASK"
+grep -q "^  version \"$VER\"$" "$CASK" && grep -q "^  sha256 \"$SHA\"$" "$CASK" || { echo "cask not updated" >&2; exit 1; }
+if git -C "$work/tap" diff --quiet; then echo "cask already at $VER"; exit 0; fi
+git -C "$work/tap" commit -q -am "forhunt-viewer $VER"
+git -C "$work/tap" push -q origin HEAD:main
+echo "cask forhunt-viewer -> $VER"
