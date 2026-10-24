@@ -13,7 +13,7 @@ use std::time::Instant;
 use forhunt_core::artifact::ParseOptions;
 
 /// forhunt version linked in (part of the cache key: a new parser rewrites).
-pub const FORHUNT_VERSION: &str = "0.2.2";
+pub const FORHUNT_VERSION: &str = "0.3.0";
 
 /// True if `path` is something forhunt parses rather than a CSV: a
 /// directory, or a file an artifact recognises by content or name.
