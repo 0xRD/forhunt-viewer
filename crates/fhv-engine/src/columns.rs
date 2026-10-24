@@ -112,16 +112,88 @@ pub fn field_bytes<'a>(
 }
 
 pub fn parse_number(b: &[u8]) -> Option<f64> {
+    parse_num(b).map(Num::as_f64)
+}
+
+/// A parsed number: integers up to ±2^64 (decimal or `0x` hex, as Windows
+/// writes Keywords such as 0x8020000000000000) stay exact; others are f64.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Num {
+    Int(i128),
+    Float(f64),
+}
+
+const INT_MAX: i128 = u64::MAX as i128;
+
+impl Num {
+    pub fn as_f64(self) -> f64 {
+        match self {
+            Num::Int(i) => i as f64,
+            Num::Float(f) => f,
+        }
+    }
+
+    /// Exact total order (integers against floats included).
+    pub fn total_cmp(self, other: Num) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        fn int_float(a: i128, b: f64) -> Ordering {
+            let fl = b.floor();
+            if fl > INT_MAX as f64 {
+                return Ordering::Less;
+            }
+            if fl < -(INT_MAX as f64) {
+                return Ordering::Greater;
+            }
+            match a.cmp(&(fl as i128)) {
+                Ordering::Equal if b > fl => Ordering::Less,
+                o => o,
+            }
+        }
+        match (self, other) {
+            (Num::Int(a), Num::Int(b)) => a.cmp(&b),
+            (Num::Float(a), Num::Float(b)) => a.total_cmp(&b),
+            (Num::Int(a), Num::Float(b)) => int_float(a, b),
+            (Num::Float(a), Num::Int(b)) => int_float(b, a).reverse(),
+        }
+    }
+
+    /// Order-preserving two-word key: the f64 order, then the exact
+    /// integer offset from that f64 (integers beyond 2^53 that share an
+    /// f64 differ by < 2^12).
+    pub fn sort_key(self) -> (u64, u64) {
+        let f = self.as_f64();
+        let b = f.to_bits();
+        let hi = if b >> 63 == 1 { !b } else { b | (1 << 63) };
+        let lo = match self {
+            Num::Int(i) => (i - f as i128).clamp(-(1 << 62), 1 << 62) as i64,
+            Num::Float(_) => 0,
+        };
+        (hi, (lo as u64) ^ (1 << 63))
+    }
+
+    /// Key for blank or unparsable cells: before every number.
+    pub const MIN_KEY: (u64, u64) = (0, 0);
+}
+
+pub fn parse_num(b: &[u8]) -> Option<Num> {
     let s = std::str::from_utf8(b).ok()?.trim();
     if s.is_empty() || s.len() > 40 {
         return None;
     }
     // Hex as forhunt / Windows write it (0x17).
     if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        return u64::from_str_radix(h, 16).ok().map(|v| v as f64);
+        return u64::from_str_radix(h, 16).ok().map(|v| Num::Int(v as i128));
+    }
+    let digits = s.strip_prefix(['+', '-']).unwrap_or(s);
+    if !digits.is_empty()
+        && digits.bytes().all(|c| c.is_ascii_digit())
+        && let Ok(i) = s.parse::<i128>()
+        && (-INT_MAX..=INT_MAX).contains(&i)
+    {
+        return Some(Num::Int(i));
     }
     let v: f64 = s.parse().ok()?;
-    v.is_finite().then_some(v)
+    v.is_finite().then_some(Num::Float(v))
 }
 
 fn is_blank(b: &[u8]) -> bool {
@@ -515,14 +587,17 @@ fn sorted_dict(values: Vec<Vec<u8>>, bitmaps: Vec<RoaringBitmap>, kind: Kind) ->
                     .then_with(|| text_cmp(&values[a], &values[b]))
             });
         }
-        Kind::Number => order.sort_by(|&a, &b| {
-            let (x, y) = (
-                nums[a].unwrap_or(f64::NEG_INFINITY),
-                nums[b].unwrap_or(f64::NEG_INFINITY),
-            );
-            x.total_cmp(&y)
-                .then_with(|| text_cmp(&values[a], &values[b]))
-        }),
+        Kind::Number => {
+            let keys: Vec<(u64, u64)> = values
+                .iter()
+                .map(|v| parse_num(v).map_or(Num::MIN_KEY, Num::sort_key))
+                .collect();
+            order.sort_by(|&a, &b| {
+                keys[a]
+                    .cmp(&keys[b])
+                    .then_with(|| text_cmp(&values[a], &values[b]))
+            })
+        }
         Kind::Text => order.sort_by(|&a, &b| text_cmp(&values[a], &values[b])),
     }
     let mut bitmaps: Vec<Option<RoaringBitmap>> = bitmaps.into_iter().map(Some).collect();
@@ -561,6 +636,35 @@ mod tests {
         assert_eq!(parse_number(b"nan"), None);
         assert_eq!(parse_number(b""), None);
         assert_eq!(parse_number(b"12abc"), None);
+        let big = |s: &str| parse_num(s.as_bytes()).unwrap();
+        assert_eq!(big("0x8000000000000001"), Num::Int(0x8000_0000_0000_0001));
+        assert_eq!(big("-12"), Num::Int(-12));
+        assert_eq!(big("1.5"), Num::Float(1.5));
+        use std::cmp::Ordering::*;
+        assert_eq!(
+            big("0x8000000000000001").total_cmp(big("9223372036854775808")),
+            Greater
+        );
+        assert_eq!(
+            big("9223372036854775808").total_cmp(big("9.223372036854775808e18")),
+            Equal
+        );
+        assert_eq!(big("3").total_cmp(big("2.5")), Greater);
+        assert_eq!(big("2").total_cmp(big("2.5")), Less);
+        assert_eq!(big("-3").total_cmp(big("-2.5")), Less);
+        let ks: Vec<(u64, u64)> = [
+            "-1e300",
+            "-5",
+            "-0.5",
+            "0",
+            "0x8000000000000000",
+            "0x8000000000000001",
+            "1e300",
+        ]
+        .iter()
+        .map(|s| big(s).sort_key())
+        .collect();
+        assert!(ks.windows(2).all(|w| w[0] < w[1]), "{ks:?}");
     }
 
     #[test]

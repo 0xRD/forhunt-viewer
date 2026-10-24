@@ -32,7 +32,7 @@ use regex::bytes::{Regex, RegexBuilder};
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
-use crate::columns::{Columns, Kind, field_bytes, parse_number};
+use crate::columns::{Columns, Kind, Num, field_bytes, parse_num};
 use crate::scan::nth_field;
 use crate::table::Table;
 use crate::time::{self, Order};
@@ -117,7 +117,7 @@ pub enum Expr {
 #[derive(Clone, Copy, Debug)]
 enum Bound {
     Time(i64),
-    Num(f64),
+    Num(Num),
 }
 
 /// A predicate compiled for one column.
@@ -226,7 +226,7 @@ impl Compiled {
                     t
                 }));
             }
-            parse_number(s.as_bytes()).map(Bound::Num)
+            parse_num(s.as_bytes()).map(Bound::Num)
         };
         // On a time column a range operand must be a date-time: a number
         // or text comparison of times silently returns nothing or nonsense
@@ -382,13 +382,13 @@ impl Compiled {
                 ok_lo && ok_hi
             }
             Some(Bound::Num(_)) => {
-                let Some(x) = parse_number(cell) else {
+                let Some(x) = parse_num(cell) else {
                     return false;
                 };
                 let ok_lo =
-                    !matches!(lo, Some(Bound::Num(l)) if !cmp(x.total_cmp(&l), lo_incl, Greater));
+                    !matches!(lo, Some(Bound::Num(l)) if !cmp(x.total_cmp(l), lo_incl, Greater));
                 let ok_hi =
-                    !matches!(hi, Some(Bound::Num(h)) if !cmp(x.total_cmp(&h), hi_incl, Less));
+                    !matches!(hi, Some(Bound::Num(h)) if !cmp(x.total_cmp(h), hi_incl, Less));
                 ok_lo && ok_hi
             }
             None => {

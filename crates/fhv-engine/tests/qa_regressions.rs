@@ -356,3 +356,69 @@ fn time_ranges_reject_operands_that_are_not_times() {
     // Text operators on time columns are unchanged.
     assert_eq!(eval(0, Op::Contains("2025-10-0".into())).unwrap().len(), 18);
 }
+
+/// Hex values above 2^53 (Windows Keywords such as 0x8020000000000000)
+/// compare exactly: 0x8000000000000001 > 0x8000000000000000. As f64 they
+/// were equal, so `>` missed rows and `<=` kept extra ones; sort tied them.
+#[test]
+fn large_hex_numbers_compare_exactly() {
+    let base: u64 = 0x8000_0000_0000_0000;
+    // Dictionary column (few values) and scanned column (many values).
+    let mut csv = String::from("Keywords,Big\n");
+    for i in 0..1200u64 {
+        csv.push_str(&format!(
+            "0x{:x},0x{:x}\n",
+            base + (i % 3),
+            base + (1199 - i)
+        ));
+    }
+    let fx = open(&csv);
+    let ci = fx.engine.table().column_index().unwrap();
+    assert!(ci.cols[0].dict.is_some() && ci.cols[1].dict.is_none());
+    assert_eq!(ci.cols[1].kind, fhv_engine::columns::Kind::Number);
+    let n = |c, op| rows(&fx, c, op).len();
+    assert_eq!(n(0, Op::Gt("0x8000000000000000".into())), 800);
+    assert_eq!(n(0, Op::Ge("0x8000000000000001".into())), 800);
+    assert_eq!(n(0, Op::Le("0x8000000000000001".into())), 800);
+    assert_eq!(n(0, Op::Lt("9223372036854775809".into())), 400);
+    assert_eq!(
+        n(
+            0,
+            Op::Between("0x8000000000000001".into(), "0x8000000000000001".into())
+        ),
+        400
+    );
+    assert_eq!(n(1, Op::Gt(format!("0x{:x}", base + 1000))), 199);
+    assert_eq!(n(1, Op::Le(format!("{}", base + 9))), 10);
+    // Sort: numeric order, exact.
+    let all: roaring::RoaringBitmap = (0..1200).collect();
+    let t = fx.engine.table();
+    let by = |c| {
+        fhv_engine::sort::sort(
+            t,
+            &all,
+            &[fhv_engine::SortKey {
+                col: c,
+                desc: false,
+            }],
+        )
+        .unwrap()
+    };
+    let k0: Vec<u32> = by(0).iter().map(|r| r % 3).collect();
+    assert!(k0.windows(2).all(|w| w[0] <= w[1]), "dictionary sort");
+    let k1 = by(1);
+    assert_eq!(k1, (0..1200u32).rev().collect::<Vec<_>>(), "scanned sort");
+    let two = fhv_engine::sort::sort(
+        t,
+        &all,
+        &[
+            fhv_engine::SortKey { col: 1, desc: true },
+            fhv_engine::SortKey {
+                col: 0,
+                desc: false,
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(two, (0..1200u32).collect::<Vec<_>>(), "multi-key sort");
+}

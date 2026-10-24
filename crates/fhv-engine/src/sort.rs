@@ -5,8 +5,9 @@
 //! - dictionary column: rank of the value in the sorted dictionary (the
 //!   column kind's order; equal times / numbers share a rank);
 //! - time column without index: ticks parsed during one scan;
-//! - number column: IEEE total-order bits of the value (blank / unparsable
-//!   as -inf, so they come first like blanks elsewhere);
+//! - number column: two words, the IEEE total-order bits of the value and
+//!   the exact integer offset from it (hex Keywords above 2^53 stay
+//!   distinct); blank / unparsable first, like blanks elsewhere;
 //! - text: the first 8 bytes, ASCII-lowercased, big-endian.
 //!
 //! Descending parts store `!key`. Rows are sorted by (keys, row) in
@@ -25,7 +26,7 @@ use rayon::prelude::*;
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
-use crate::columns::{self, Columns, Kind, field_bytes, parse_number};
+use crate::columns::{self, Columns, Kind, Num, field_bytes, parse_num};
 use crate::scan::nth_field;
 use crate::table::Table;
 use crate::time::{self, Order};
@@ -48,13 +49,18 @@ enum PartKind {
     Text,
 }
 
-fn i64_key(v: i64) -> u64 {
-    (v as u64) ^ (1 << 63)
+/// Key slots of a part: text windows, two words for exact numbers
+/// (see [`Num::sort_key`]), else one.
+fn width(pk: PartKind) -> usize {
+    match pk {
+        PartKind::Text => TW,
+        PartKind::Number => 2,
+        _ => 1,
+    }
 }
 
-fn f64_key(v: f64) -> u64 {
-    let b = v.to_bits();
-    if b >> 63 == 1 { !b } else { b | (1 << 63) }
+fn i64_key(v: i64) -> u64 {
+    (v as u64) ^ (1 << 63)
 }
 
 /// Rows of `rows` in sorted order.
@@ -138,17 +144,15 @@ fn fast_single(ci: &Columns, rows: &RoaringBitmap, key: SortKey) -> Option<Vec<u
 /// and keep file order like on the other sort paths. The dictionary is
 /// already in the column's sort order.
 fn tie_ranks(d: &columns::Dict, kind: Kind) -> Vec<u32> {
-    let key = |v: &str| -> Option<u64> {
+    let key = |v: &str| -> Option<(u64, u64)> {
         match kind {
-            Kind::Time(o) => Some(i64_key(time::parse(v.as_bytes(), o).unwrap_or(i64::MIN))),
-            Kind::Number => Some(f64_key(
-                parse_number(v.as_bytes()).unwrap_or(f64::NEG_INFINITY),
-            )),
+            Kind::Time(o) => Some((i64_key(time::parse(v.as_bytes(), o).unwrap_or(i64::MIN)), 0)),
+            Kind::Number => Some(parse_num(v.as_bytes()).map_or(Num::MIN_KEY, Num::sort_key)),
             Kind::Text => None,
         }
     };
     let mut out = Vec::with_capacity(d.values.len());
-    let mut prev: Option<u64> = None;
+    let mut prev: Option<(u64, u64)> = None;
     for (i, v) in d.values.iter().enumerate() {
         let k = key(v);
         let r = match (k, prev, out.last()) {
@@ -219,7 +223,7 @@ fn general(
     let mut k = 0usize;
     for pk in &kinds {
         off.push(k);
-        k += if *pk == PartKind::Text { TW } else { 1 };
+        k += width(*pk);
     }
     let trace = std::env::var_os("FHV_TRACE").is_some();
     let t0 = std::time::Instant::now();
@@ -305,8 +309,9 @@ fn general(
                                 sl[off[p]] = i64_key(time::parse(cell, o).unwrap_or(i64::MIN))
                             }
                             PartKind::Number => {
-                                sl[off[p]] =
-                                    f64_key(parse_number(cell).unwrap_or(f64::NEG_INFINITY))
+                                let (hi, lo) = parse_num(cell).map_or(Num::MIN_KEY, Num::sort_key);
+                                sl[off[p]] = hi;
+                                sl[off[p] + 1] = lo;
                             }
                             _ => {
                                 text_window(cell, 0, &mut sl[off[p]..off[p] + TW]);
@@ -324,7 +329,7 @@ fn general(
                 for (i, fl) in flags.into_iter().enumerate() {
                     let dst = &mut flat[(pos + i) * k..(pos + i + 1) * k];
                     for &p in &scanned {
-                        let w = if kinds[p] == PartKind::Text { TW } else { 1 };
+                        let w = width(kinds[p]);
                         dst[off[p]..off[p] + w]
                             .copy_from_slice(&slots[i * k + off[p]..i * k + off[p] + w]);
                     }
@@ -346,7 +351,7 @@ fn general(
     // Descending parts.
     for (p, key) in keys.iter().enumerate() {
         if key.desc {
-            let w = if kinds[p] == PartKind::Text { TW } else { 1 };
+            let w = width(kinds[p]);
             flat.par_chunks_mut(k).for_each(|f| {
                 for x in &mut f[off[p]..off[p] + w] {
                     *x = !*x;
@@ -610,11 +615,7 @@ impl Resolve<'_> {
                         let o = columns::text_cmp(&extra[x][j], &extra[y][j]);
                         if self.keys[p].desc { o.reverse() } else { o }
                     } else {
-                        let w = if self.kinds[p] == PartKind::Text {
-                            TW
-                        } else {
-                            1
-                        };
+                        let w = width(self.kinds[p]);
                         let (fa, fb) = (ia * self.k + self.off[p], ib * self.k + self.off[p]);
                         self.flat[fa..fa + w].cmp(&self.flat[fb..fb + w])
                     };
@@ -637,11 +638,12 @@ mod tests {
 
     #[test]
     fn keys_preserve_order() {
-        let xs = [-5.5f64, -0.0, 0.0, 1e-9, 3.0, f64::INFINITY];
+        let xs = [-5.5f64, -0.0, 0.0, 1e-9, 3.0, 1e300];
         for w in xs.windows(2) {
-            assert!(f64_key(w[0]) <= f64_key(w[1]), "{w:?}");
+            let k = |x: f64| Num::Float(x).sort_key();
+            assert!(k(w[0]) <= k(w[1]), "{w:?}");
         }
-        assert!(f64_key(f64::NEG_INFINITY) < f64_key(-1e300));
+        assert!(Num::MIN_KEY < Num::Float(-1e300).sort_key());
         assert!(i64_key(i64::MIN) < i64_key(-1));
         assert!(i64_key(-1) < i64_key(0));
         let w = |c: &[u8], from| {

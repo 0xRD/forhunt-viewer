@@ -15,8 +15,8 @@ use crate::{Error, Result};
 
 const MAGIC: &[u8; 8] = b"FHVIDX\0\x01";
 /// Bump when any section layout or meaning changes (3: dictionaries are
-/// stored in the column kind's sort order).
-pub const VERSION: u32 = 3;
+/// stored in the column kind's sort order; 4: exact integer order).
+pub const VERSION: u32 = 4;
 
 #[derive(Default)]
 pub struct Writer {
