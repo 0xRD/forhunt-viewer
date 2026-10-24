@@ -417,9 +417,7 @@ proptest! {
                 for k in &keys {
                     let (x, y) = (cell(&f.rows[a as usize], k.col), cell(&f.rows[b as usize], k.col));
                     let o = match k.col {
-                        2 => parse_num(x).unwrap_or(f64::NEG_INFINITY).total_cmp(&parse_num(y).unwrap_or(f64::NEG_INFINITY))
-                            .then_with(|| fhv_engine::columns::text_cmp(x.as_bytes(), y.as_bytes())),
-                        5 => parse_num(x).unwrap_or(f64::NEG_INFINITY).total_cmp(&parse_num(y).unwrap_or(f64::NEG_INFINITY)),
+                        2 | 5 => parse_num(x).unwrap_or(f64::NEG_INFINITY).total_cmp(&parse_num(y).unwrap_or(f64::NEG_INFINITY)),
                         3 => parse_time(x).unwrap_or(i64::MIN).cmp(&parse_time(y).unwrap_or(i64::MIN)),
                         _ => fhv_engine::columns::text_cmp(x.as_bytes(), y.as_bytes()),
                     };

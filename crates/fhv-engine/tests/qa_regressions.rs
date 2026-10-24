@@ -117,3 +117,137 @@ fn coarse_time_upper_bounds_cover_their_unit() {
         );
     }
 }
+
+/// A time or number column with few distinct values is a dictionary column;
+/// sorting it walks the dictionary order, which was text order: `1/10/2024`
+/// before `1/2/2024`, and `10` before `9` as soon as one cell of a number
+/// column was not a number. It now follows the column's kind, like the
+/// other sort paths (unparsable cells first, as blanks).
+#[test]
+fn dictionary_columns_sort_by_their_kind() {
+    let seen = [
+        "1/2/2024",
+        "1/10/2024 9:00 PM",
+        "12/1/2023",
+        "",
+        "2/1/2024",
+        "1/10/2024 10:00 AM",
+    ];
+    let nums = ["10", "9", "100", "-3", "0x10"];
+    let mut cells = Vec::new();
+    let mut csv = String::from("TimeCreated,Seen,Num\n");
+    for i in 0..300 {
+        // One cell in 300 is not a number: still a number column (99 %).
+        let n = if i == 7 { "n/a" } else { nums[i % 5] };
+        let s = seen[i % 6];
+        csv.push_str(&format!(
+            "2024-01-01 00:{:02}:{:02},{s},{n}\n",
+            i / 60,
+            i % 60
+        ));
+        cells.push((s, n));
+    }
+    let fx = open(&csv);
+    let t = fx.engine.table();
+    let ci = t.column_index().unwrap();
+    assert!(matches!(
+        ci.cols[1].kind,
+        fhv_engine::columns::Kind::Time(_)
+    ));
+    assert!(ci.cols[1].dict.is_some() && ci.cols[1].time.is_none());
+    assert_eq!(ci.cols[2].kind, fhv_engine::columns::Kind::Number);
+    assert!(ci.cols[2].dict.is_some());
+    let all: roaring::RoaringBitmap = (0..300).collect();
+    let order = |col: usize, desc: bool, single: bool| -> Vec<&str> {
+        let mut keys = vec![fhv_engine::SortKey { col, desc }];
+        if !single {
+            keys.push(fhv_engine::SortKey {
+                col: 0,
+                desc: false,
+            });
+        }
+        let v = fhv_engine::sort::sort(t, &all, &keys).unwrap();
+        // Distinct values in display order; ties in file order.
+        assert!(v.windows(2).all(|w| {
+            let (a, b) = (cells[w[0] as usize], cells[w[1] as usize]);
+            let (a, b) = if col == 1 { (a.0, b.0) } else { (a.1, b.1) };
+            a != b || w[0] < w[1]
+        }));
+        let mut out: Vec<&str> = v
+            .iter()
+            .map(|&r| {
+                let c = cells[r as usize];
+                if col == 1 { c.0 } else { c.1 }
+            })
+            .collect();
+        out.dedup();
+        out
+    };
+    let times = [
+        "",
+        "12/1/2023",
+        "1/2/2024",
+        "1/10/2024 10:00 AM",
+        "1/10/2024 9:00 PM",
+        "2/1/2024",
+    ];
+    let numbers = ["n/a", "-3", "9", "10", "0x10", "100"];
+    for single in [true, false] {
+        assert_eq!(order(1, false, single), times, "single {single}");
+        let mut rev = times;
+        rev.reverse();
+        assert_eq!(order(1, true, single), rev, "single {single}");
+        assert_eq!(order(2, false, single), numbers, "single {single}");
+        let mut rev = numbers;
+        rev.reverse();
+        assert_eq!(order(2, true, single), rev, "single {single}");
+    }
+}
+
+/// Equal times / numbers spelled differently (merged timelines: `...Z` and
+/// `... ` forms, `0x10` and `16`) tie: they keep file order and the next
+/// sort key decides, as on the non-dictionary paths. The dictionary rank
+/// used to order them by spelling.
+#[test]
+fn dictionary_ties_across_spellings_keep_file_order() {
+    let mut csv = String::from("TimeCreated,Seen,Num,k\n");
+    for i in 0..100 {
+        let seen = ["2024-01-02 10:00:00", "2024-01-02T10:00:00Z", "2024-01-01"][i % 3];
+        let num = ["16", "0x10", "1"][i % 3];
+        csv.push_str(&format!(
+            "2024-01-01 00:{:02}:{:02},{seen},{num},{}\n",
+            i / 60,
+            i % 60,
+            99 - i
+        ));
+    }
+    let fx = open(&csv);
+    let t = fx.engine.table();
+    let ci = t.column_index().unwrap();
+    assert!(ci.cols[1].dict.is_some() && ci.cols[2].dict.is_some());
+    let all: roaring::RoaringBitmap = (0..100).collect();
+    let key = |col, desc| fhv_engine::SortKey { col, desc };
+    for col in [1, 2] {
+        for desc in [false, true] {
+            let small: Vec<u32> = (0..100).filter(|r| r % 3 == 2).collect();
+            let big: Vec<u32> = (0..100).filter(|r| r % 3 != 2).collect();
+            // Single key: equal values in file order.
+            let want: Vec<u32> = if desc {
+                [big.clone(), small.clone()].concat()
+            } else {
+                [small.clone(), big.clone()].concat()
+            };
+            let got = fhv_engine::sort::sort(t, &all, &[key(col, desc)]).unwrap();
+            assert_eq!(got, want, "col {col} desc {desc}");
+            // Second key k ascending = file order reversed within ties.
+            let rev = |v: &Vec<u32>| v.iter().rev().copied().collect::<Vec<u32>>();
+            let want: Vec<u32> = if desc {
+                [rev(&big), rev(&small)].concat()
+            } else {
+                [rev(&small), rev(&big)].concat()
+            };
+            let got = fhv_engine::sort::sort(t, &all, &[key(col, desc), key(3, false)]).unwrap();
+            assert_eq!(got, want, "col {col} desc {desc}, then k");
+        }
+    }
+}

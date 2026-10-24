@@ -2,7 +2,8 @@
 //!
 //! Every key part becomes an order-preserving `u64`:
 //! - indexed time column: ticks (sign bit flipped);
-//! - dictionary column: rank of the value in the sorted dictionary;
+//! - dictionary column: rank of the value in the sorted dictionary (the
+//!   column kind's order; equal times / numbers share a rank);
 //! - time column without index: ticks parsed during one scan;
 //! - number column: IEEE total-order bits of the value (blank / unparsable
 //!   as -inf, so they come first like blanks elsewhere);
@@ -108,17 +109,56 @@ fn fast_single(ci: &Columns, rows: &RoaringBitmap, key: SortKey) -> Option<Vec<u
     }
     if let Some(d) = &col.dict {
         let mut out = Vec::with_capacity(rows.len() as usize);
-        let order: Box<dyn Iterator<Item = &RoaringBitmap>> = if key.desc {
-            Box::new(d.bitmaps.iter().rev())
-        } else {
-            Box::new(d.bitmaps.iter())
-        };
-        for b in order {
-            out.extend((b & rows).iter());
+        // One group of equal sort keys at a time (rows in file order).
+        let rank = tie_ranks(d, col.kind);
+        let mut groups: Vec<std::ops::Range<usize>> = Vec::new();
+        let mut s = 0;
+        while s < rank.len() {
+            let e = s + rank[s..].iter().take_while(|&&r| r == rank[s]).count();
+            groups.push(s..e);
+            s = e;
+        }
+        if key.desc {
+            groups.reverse();
+        }
+        for g in groups {
+            let mut b = RoaringBitmap::new();
+            for i in g {
+                b |= &d.bitmaps[i] & rows;
+            }
+            out.extend(b.iter());
         }
         return Some(out);
     }
     None
+}
+
+/// Sort rank of each dictionary value: values whose sort keys are equal
+/// (`0x10` and `16`, two spellings of one time) share a rank, so they tie
+/// and keep file order like on the other sort paths. The dictionary is
+/// already in the column's sort order.
+fn tie_ranks(d: &columns::Dict, kind: Kind) -> Vec<u32> {
+    let key = |v: &str| -> Option<u64> {
+        match kind {
+            Kind::Time(o) => Some(i64_key(time::parse(v.as_bytes(), o).unwrap_or(i64::MIN))),
+            Kind::Number => Some(f64_key(
+                parse_number(v.as_bytes()).unwrap_or(f64::NEG_INFINITY),
+            )),
+            Kind::Text => None,
+        }
+    };
+    let mut out = Vec::with_capacity(d.values.len());
+    let mut prev: Option<u64> = None;
+    for (i, v) in d.values.iter().enumerate() {
+        let k = key(v);
+        let r = match (k, prev, out.last()) {
+            (Some(k), Some(p), Some(&last)) if k == p => last,
+            _ => i as u32,
+        };
+        out.push(r);
+        prev = k;
+    }
+    out
 }
 
 /// Runs up to this size are sorted by direct full comparison.
@@ -210,10 +250,11 @@ fn general(
                 let d = cols
                     .and_then(|ci| ci.cols[key.col].dict.as_ref())
                     .ok_or(Error::Poisoned)?;
+                let ranks = tie_ranks(d, cols.map_or(Kind::Text, |ci| ci.cols[key.col].kind));
                 let mut rk = vec![0u32; n_all];
                 for (i, b) in d.bitmaps.iter().enumerate() {
                     for row in b & rows {
-                        rk[row as usize] = i as u32;
+                        rk[row as usize] = ranks[i];
                     }
                 }
                 flat.par_chunks_mut(k)

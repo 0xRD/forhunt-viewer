@@ -14,8 +14,9 @@ use std::path::{Path, PathBuf};
 use crate::{Error, Result};
 
 const MAGIC: &[u8; 8] = b"FHVIDX\0\x01";
-/// Bump when any section layout changes.
-pub const VERSION: u32 = 2;
+/// Bump when any section layout or meaning changes (3: dictionaries are
+/// stored in the column kind's sort order).
+pub const VERSION: u32 = 3;
 
 #[derive(Default)]
 pub struct Writer {

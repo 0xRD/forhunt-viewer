@@ -40,8 +40,9 @@ pub enum Kind {
 /// Per-value row bitmaps of a low-cardinality column.
 #[derive(Clone, Debug, Default)]
 pub struct Dict {
-    /// Distinct decoded values, sorted (numerically if all are numbers,
-    /// else case-insensitively).
+    /// Distinct decoded values, sorted by the column's kind (times, numbers,
+    /// else case-insensitively; unparsable values first), then by
+    /// [`text_cmp`]. This is the sort order of the column.
     pub values: Vec<String>,
     pub bitmaps: Vec<RoaringBitmap>,
     pub numeric: bool,
@@ -471,7 +472,7 @@ pub fn build(table: &Table) -> Result<Columns> {
         }
         let values = std::mem::take(&mut gvalues[c]);
         let bitmaps = std::mem::take(&mut gbitmaps[c]);
-        cols[c].dict = Some(sorted_dict(values, bitmaps));
+        cols[c].dict = Some(sorted_dict(values, bitmaps, kinds[c]));
     }
     if let Some(tc) = primary_time {
         cols[tc].time = Some(time_index(ticks));
@@ -492,25 +493,38 @@ pub fn text_cmp(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
     la.cmp(lb).then_with(|| a.cmp(b))
 }
 
-fn sorted_dict(values: Vec<Vec<u8>>, bitmaps: Vec<RoaringBitmap>) -> Dict {
+/// Dictionary in the sort order of a column of `kind` (the order the
+/// general sort uses for such a column: parsed times / numbers with
+/// unparsable cells first, else text), ties by [`text_cmp`].
+fn sorted_dict(values: Vec<Vec<u8>>, bitmaps: Vec<RoaringBitmap>, kind: Kind) -> Dict {
     let nums: Vec<Option<f64>> = values.iter().map(|v| parse_number(v)).collect();
     let numeric = nums
         .iter()
         .zip(&values)
         .all(|(n, v)| n.is_some() || is_blank(v));
     let mut order: Vec<usize> = (0..values.len()).collect();
-    order.sort_by(|&a, &b| {
-        if numeric {
+    match kind {
+        Kind::Time(o) => {
+            let ticks: Vec<i64> = values
+                .iter()
+                .map(|v| time::parse(v, o).unwrap_or(i64::MIN))
+                .collect();
+            order.sort_by(|&a, &b| {
+                ticks[a]
+                    .cmp(&ticks[b])
+                    .then_with(|| text_cmp(&values[a], &values[b]))
+            });
+        }
+        Kind::Number => order.sort_by(|&a, &b| {
             let (x, y) = (
                 nums[a].unwrap_or(f64::NEG_INFINITY),
                 nums[b].unwrap_or(f64::NEG_INFINITY),
             );
             x.total_cmp(&y)
                 .then_with(|| text_cmp(&values[a], &values[b]))
-        } else {
-            text_cmp(&values[a], &values[b])
-        }
-    });
+        }),
+        Kind::Text => order.sort_by(|&a, &b| text_cmp(&values[a], &values[b])),
+    }
     let mut bitmaps: Vec<Option<RoaringBitmap>> = bitmaps.into_iter().map(Some).collect();
     Dict {
         values: order
@@ -558,6 +572,7 @@ mod tests {
                 RoaringBitmap::new(),
                 RoaringBitmap::new(),
             ],
+            Kind::Number,
         );
         assert!(d.numeric);
         assert_eq!(d.values, ["", "9", "10"]);
@@ -568,6 +583,7 @@ mod tests {
                 RoaringBitmap::new(),
                 RoaringBitmap::new(),
             ],
+            Kind::Text,
         );
         assert_eq!(d.values, ["a", "B", "b"]);
     }
