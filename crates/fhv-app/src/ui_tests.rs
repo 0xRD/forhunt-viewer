@@ -558,3 +558,108 @@ fn forhunt_show_uses_the_tabs_own_evidence() {
         Some(Ok("forhunt show 4a2aa2ed:12 -p '/case/A dir'".into()))
     );
 }
+
+/// Opening an event log: forhunt parses it, the tab opens sorted by
+/// TimeCreated (oldest first, ties in file order), knows its evidence, and
+/// the rows are exactly those of the CSV.
+#[test]
+fn evtx_opens_as_a_timeline_sorted_by_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let evtx = std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/testdata/PowerShell.evtx"
+    ));
+    let mut h = harness(dir.path(), &evtx);
+    wait(&mut h, |a| {
+        a.tabs.len() == 1 && idle(a) && a.tabs[0].view.order.is_some()
+    });
+    let t = &h.state().tabs[0];
+    assert_eq!(t.origin.as_ref().map(|o| o.1.as_str()), evtx.to_str());
+    let tc = t
+        .table
+        .columns
+        .iter()
+        .position(|c| c == "TimeCreated")
+        .unwrap();
+    assert_eq!(
+        t.sort,
+        [fhv_engine::SortKey {
+            col: tc,
+            desc: false
+        }]
+    );
+    assert_eq!(t.view.len(), t.table.row_count());
+    let key = |r: u32| {
+        let f = t.table.row_fields(r as u64).unwrap();
+        (fhv_engine::time::parse_any(f[tc].as_bytes()).unwrap(), r)
+    };
+    let shown: Vec<(i64, u32)> = t.view.iter().map(key).collect();
+    let mut want = shown.clone();
+    want.sort();
+    assert_eq!(shown, want);
+}
+
+/// Every UI filter at once (quick filter, conditions with match any, value
+/// selection, global search with "only matches", tagged only) keeps
+/// exactly the rows a plain evaluation of the same rules keeps; Clear
+/// filters brings every row back.
+#[test]
+fn combined_ui_filters_equal_a_plain_evaluation() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    let t = &mut h.state_mut().tabs[0];
+    // User: quick "S" (case-insensitive: asmith, SYSTEM), value selection
+    // without SYSTEM; EventId: 4624 or > 4680; Message search "msg 1".
+    t.filters[2].quick = "S".into();
+    t.filters[2].set_values([
+        ("asmith", true),
+        ("bwilson", true),
+        ("jdoe", true),
+        ("SYSTEM", false),
+    ]);
+    t.filters[1].conds = vec![Op::Equals("4624".into()), Op::Gt("4680".into())];
+    t.filters[1].any = true;
+    t.search = "MSG 1".into();
+    t.search_filter = true;
+    for r in [1u32, 2, 5, 10, 13, 100, 101, 999] {
+        t.toggle_tag(r);
+    }
+    t.tagged_only = false;
+    t.requery();
+    let want = |tagged: bool| -> Vec<u32> {
+        (0..1000u32)
+            .filter(|&i| {
+                let ev = [4624, 4625, 4688][(i % 3) as usize];
+                let user = ["jdoe", "asmith", "SYSTEM", "bwilson"][(i % 4) as usize];
+                let msg = format!("msg {i}, \"q\"");
+                user.to_lowercase().contains('s')
+                    && user != "SYSTEM"
+                    && (ev == 4624 || ev > 4680)
+                    && msg.contains("msg 1")
+                    && (!tagged || [1, 2, 5, 10, 13, 100, 101, 999].contains(&i))
+            })
+            .collect()
+    };
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() < 1000);
+    assert_eq!(
+        h.state().tabs[0].view.iter().collect::<Vec<_>>(),
+        want(false)
+    );
+    h.state_mut().tabs[0].tagged_only = true;
+    h.state_mut().tabs[0].requery();
+    wait(&mut h, |a| {
+        a.tabs[0].ready()
+            && a.tabs[0].job.is_none()
+            && a.tabs[0].view.len() == want(true).len() as u64
+    });
+    assert_eq!(
+        h.state().tabs[0].view.iter().collect::<Vec<_>>(),
+        want(true)
+    );
+    h.get_by_label("Clear filters").click();
+    h.step();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 1000);
+    assert!(h.state().tabs[0].filters.iter().all(|f| !f.is_active()));
+}
