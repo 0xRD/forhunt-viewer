@@ -4,7 +4,7 @@ members = ["crates/fhv-engine", "crates/fhv-app", "tools/csv-gen", "tools/fhv-be
 default-members = ["crates/fhv-app"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -13,7 +13,7 @@ homepage = "https://github.com/0xRD/forhunt-viewer"
 authors = ["0xRD"]
 
 [workspace.dependencies]
-fhv-engine = { path = "crates/fhv-engine", version = "0.1.0" }
+fhv-engine = { path = "crates/fhv-engine", version = "0.1.1" }
 anyhow = "1"
 thiserror = "2"
 # Pure Rust: we hash ~192 KiB per file; no C toolchain needed for cross builds.
