@@ -528,3 +528,33 @@ fn export_refuses_a_view_that_is_not_the_current_filter() {
     h.step();
     assert!(h.state().tabs[0].job.is_none() && !out.exists());
 }
+
+/// "Copy forhunt show command" points at the evidence the tab was parsed
+/// from, not at the evidence parsed last in another tab (that command
+/// failed with "not found").
+#[test]
+fn forhunt_show_uses_the_tabs_own_evidence() {
+    use crate::app::forhunt_show_command_for_test as cmd;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("events.csv");
+    std::fs::write(&file, "TimeCreated,EventId,ForhuntId\n2024-03-11 10:00:00,4624,4a2aa2ed:12\n2024-03-11 10:00:01,4625,bad id\n").unwrap();
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    let t = &mut h.state_mut().tabs[0];
+    // A plain CSV: the path from the forhunt menu, else a placeholder.
+    assert_eq!(
+        cmd(t, 0, "/case/B"),
+        Some(Ok("forhunt show 4a2aa2ed:12 -p /case/B".into()))
+    );
+    assert_eq!(
+        cmd(t, 0, ""),
+        Some(Ok("forhunt show 4a2aa2ed:12 -p '<evidence>'".into()))
+    );
+    assert!(matches!(cmd(t, 1, "/case/B"), Some(Err(_))));
+    // A tab parsed by forhunt from /case/A while /case/B was parsed last.
+    t.origin = Some(("A".into(), "/case/A dir".into()));
+    assert_eq!(
+        cmd(t, 0, "/case/B"),
+        Some(Ok("forhunt show 4a2aa2ed:12 -p '/case/A dir'".into()))
+    );
+}

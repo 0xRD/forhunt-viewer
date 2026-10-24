@@ -1179,24 +1179,14 @@ impl App {
                     }
                 }
                 CellAction::ForhuntShow(row) => {
-                    if let (Some(r), Some(c)) = (t.view.row_at(row), forhunt_col(t))
-                        && let Ok(f) = t.table.row_fields(r as u64)
-                    {
-                        let id = f.get(c).cloned().unwrap_or_default();
-                        // The id comes from the file: only a well-formed
-                        // forhunt id goes into a shell command.
-                        if valid_forhunt_id(&id) {
-                            let ev = if evidence.is_empty() {
-                                "<evidence>".to_string()
-                            } else {
-                                evidence.clone()
-                            };
-                            ui.ctx()
-                                .copy_text(format!("forhunt show {id} -p {}", shell_quote(&ev)));
-                            t.status = Some("copied forhunt command".into());
-                        } else {
-                            t.status =
-                                Some(format!("not a forhunt id: {:?}", grid::display_text(&id)));
+                    if let Some(r) = t.view.row_at(row) {
+                        match forhunt_show_command(t, r, &evidence) {
+                            Some(Ok(cmd)) => {
+                                ui.ctx().copy_text(cmd);
+                                t.status = Some("copied forhunt command".into());
+                            }
+                            Some(Err(e)) => t.status = Some(e),
+                            None => {}
                         }
                     }
                 }
@@ -1761,6 +1751,39 @@ enum CellAction {
     Note(u64),
     FilterEq(u64, usize, bool),
     ForhuntShow(u64),
+}
+
+/// `forhunt show <id> -p <evidence>` for data row `r`: the evidence this
+/// tab was parsed from (a forhunt tab), else the path set in the forhunt
+/// menu (the last evidence parsed), else a placeholder. None without a
+/// ForhuntId column.
+fn forhunt_show_command(t: &Tab, r: u32, evidence: &str) -> Option<Result<String, String>> {
+    let c = forhunt_col(t)?;
+    let f = t.table.row_fields(r as u64).ok()?;
+    let id = f.get(c).cloned().unwrap_or_default();
+    // The id comes from the file: only a well-formed forhunt id goes into a
+    // shell command.
+    if !valid_forhunt_id(&id) {
+        return Some(Err(format!(
+            "not a forhunt id: {:?}",
+            grid::display_text(&id)
+        )));
+    }
+    let ev = match &t.origin {
+        Some((_, ev)) if !ev.is_empty() => ev.as_str(),
+        _ if !evidence.is_empty() => evidence,
+        _ => "<evidence>",
+    };
+    Some(Ok(format!("forhunt show {id} -p {}", shell_quote(ev))))
+}
+
+#[cfg(test)]
+pub fn forhunt_show_command_for_test(
+    t: &Tab,
+    r: u32,
+    evidence: &str,
+) -> Option<Result<String, String>> {
+    forhunt_show_command(t, r, evidence)
 }
 
 fn forhunt_col(t: &Tab) -> Option<usize> {
