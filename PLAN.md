@@ -226,6 +226,6 @@ extrapolated only with a recorded rationale.
 - Colour rules.
 - Per-tool column layouts (our own definitions).
 - Multi-file merged timeline.
-- Opening evidence directly via `forhunt-core` pinned to a git tag.
+- ~~Opening evidence directly via `forhunt-core` pinned to a git tag.~~ Done in 0.2.0 (D-033).
 - JSONL input.
 - Column statistics and a time histogram.

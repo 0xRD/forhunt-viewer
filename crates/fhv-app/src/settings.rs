@@ -123,8 +123,8 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()>
 /// Files under the cache directory with size and modification time.
 fn cache_files(dir: &std::path::Path) -> Vec<(PathBuf, u64, std::time::SystemTime)> {
     let mut out = Vec::new();
-    for sub in ["index", "transcoded"] {
-        if let Ok(rd) = std::fs::read_dir(dir.join(sub)) {
+    fn files_in(d: &std::path::Path, out: &mut Vec<(PathBuf, u64, std::time::SystemTime)>) {
+        if let Ok(rd) = std::fs::read_dir(d) {
             for e in rd.flatten() {
                 if let Ok(m) = e.metadata()
                     && m.is_file()
@@ -136,6 +136,15 @@ fn cache_files(dir: &std::path::Path) -> Vec<(PathBuf, u64, std::time::SystemTim
                     ));
                 }
             }
+        }
+    }
+    for sub in ["index", "transcoded"] {
+        files_in(&dir.join(sub), &mut out);
+    }
+    // CSVs written by forhunt: forhunt/<key>/<name>.csv (D-033).
+    if let Ok(rd) = std::fs::read_dir(dir.join("forhunt")) {
+        for e in rd.flatten() {
+            files_in(&e.path(), &mut out);
         }
     }
     out

@@ -28,6 +28,36 @@
         <string>public.plain-text</string>
       </array>
     </dict>
+    <!-- Event logs and evidence folders are parsed by forhunt (D-033). -->
+    <dict>
+      <key>CFBundleTypeName</key><string>Windows event log</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.microsoft.evtx</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Evidence folder</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.folder</string></array>
+    </dict>
+  </array>
+  <!-- macOS has no type for .evtx: declare one so it can be listed above. -->
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>com.microsoft.evtx</string>
+      <key>UTTypeDescription</key><string>Windows event log</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>evtx</string></array>
+      </dict>
+    </dict>
   </array>
 </dict>
 </plist>

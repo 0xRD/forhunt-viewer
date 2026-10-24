@@ -66,6 +66,8 @@ pub struct Job {
 
 pub struct Tab {
     pub path: PathBuf,
+    /// For a CSV written by forhunt: (tab name, evidence path) (D-033).
+    pub origin: Option<(String, String)>,
     pub table: Arc<Table>,
     pub engine: Arc<Engine>,
     loader: Option<Receiver<Result<(), String>>>,
@@ -147,6 +149,7 @@ impl Tab {
             .collect();
         Ok(Tab {
             path: path.to_path_buf(),
+            origin: None,
             engine: Arc::new(Engine::new(table.clone())),
             table,
             loader: Some(rx),
@@ -189,10 +192,21 @@ impl Tab {
     }
 
     pub fn title(&self) -> String {
+        if let Some((name, _)) = &self.origin {
+            return name.clone();
+        }
         self.path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default()
+    }
+
+    /// What the tab shows: the evidence for forhunt tabs, else the file.
+    pub fn shown_path(&self) -> String {
+        match &self.origin {
+            Some((_, ev)) => ev.clone(),
+            None => self.path.display().to_string(),
+        }
     }
 
     pub fn loading(&self) -> bool {

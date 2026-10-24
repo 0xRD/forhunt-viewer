@@ -6,6 +6,9 @@ filters them interactively. It is the graphical companion of
 [forhunt](https://github.com/0xRD/forensic-hunter).
 
 It reads:
+- **Windows event logs (`.evtx`), NTFS `$MFT` / `$UsnJrnl:$J`, or a whole
+  evidence folder**, parsed by forhunt's own engine (built in, nothing to
+  install) into one timeline;
 - forhunt CSV (EvtxECmd layout plus `ForhuntId`);
 - Eric Zimmerman tools output (EvtxECmd, MFTECmd, PECmd, ...);
 - Hayabusa, plaso/psort l2tcsv, and any other CSV / TSV.
@@ -16,6 +19,14 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
 
 ## Features
 
+- **Open evidence directly.** Drop `.evtx` files, `$MFT` / `$J`, or a folder
+  (File > *Open evidence folder…*): forhunt parses them in the background
+  (cancellable) into a CSV identical to `forhunt parse -F csv`, which opens
+  as one timeline sorted by `TimeCreated`. Files dropped together become one
+  timeline. The CSV is cached (not written next to the evidence), so
+  reopening is instant; File > *Export rows…* saves it, or a filtered part.
+  The forhunt evidence path is set for you, so *Copy `forhunt show`
+  command* works straight away. 56,930 events (67 MB, 13 logs) take 0.1 s.
 - **Instant open.** The first rows show in well under a second, while a
   parallel, quote-aware pass indexes the file in the background. The index
   is cached, so reopening a 5 GB file takes under a second.

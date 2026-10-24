@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   WiX v5 source of the forhunt-viewer MSI (per-machine).
-  Registers forhunt-viewer under "Open with" for .csv / .tsv / .txt through
+  Registers forhunt-viewer under "Open with" for .csv / .tsv / .txt / .evtx through
   OpenWithProgids; it never becomes the default handler.
   Build: wix build -arch x64 -d Version=X.Y.Z -d BinDir=DIR forhunt-viewer.wxs -o out.msi
 -->
@@ -37,10 +37,12 @@
           <RegistryValue Root="HKLM" Key="Software\Classes\.csv\OpenWithProgids" Name="forhunt-viewer.table" Value="" Type="string" />
           <RegistryValue Root="HKLM" Key="Software\Classes\.tsv\OpenWithProgids" Name="forhunt-viewer.table" Value="" Type="string" />
           <RegistryValue Root="HKLM" Key="Software\Classes\.txt\OpenWithProgids" Name="forhunt-viewer.table" Value="" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\.evtx\OpenWithProgids" Name="forhunt-viewer.table" Value="" Type="string" />
           <!-- "Open with > Choose another app" list. -->
           <RegistryValue Root="HKLM" Key="Software\Classes\Applications\forhunt-viewer.exe\shell\open\command" Value="&quot;[INSTALLFOLDER]forhunt-viewer.exe&quot; &quot;%1&quot;" Type="string" />
           <RegistryValue Root="HKLM" Key="Software\Classes\Applications\forhunt-viewer.exe\SupportedTypes" Name=".csv" Value="" Type="string" />
           <RegistryValue Root="HKLM" Key="Software\Classes\Applications\forhunt-viewer.exe\SupportedTypes" Name=".tsv" Value="" Type="string" />
+          <RegistryValue Root="HKLM" Key="Software\Classes\Applications\forhunt-viewer.exe\SupportedTypes" Name=".evtx" Value="" Type="string" />
         </Component>
       </Directory>
     </StandardDirectory>

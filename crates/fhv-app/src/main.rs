@@ -8,6 +8,7 @@
 //! ```
 
 mod app;
+mod convert;
 mod fonts;
 mod grid;
 #[cfg(target_os = "macos")]
@@ -34,7 +35,7 @@ fn main() -> eframe::Result {
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "forhunt-viewer {}: fast timeline / CSV viewer\n\nusage: forhunt-viewer [FILE...]\n\nFiles are opened read-only; indexes are cached in the OS cache directory.",
+            "forhunt-viewer {}: fast timeline / CSV viewer\n\nusage: forhunt-viewer [PATH...]\n\nPATH: a CSV/TSV, or Windows event logs (.evtx), $MFT, $J or a folder of them\n(parsed by forhunt into one timeline). Files are opened read-only; indexes and\nparsed timelines are cached in the OS cache directory.",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());

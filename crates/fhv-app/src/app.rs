@@ -122,6 +122,8 @@ pub struct App {
     goto: Option<String>,
     note_edit: Option<(u32, String)>,
     evidence_dlg: Option<String>,
+    /// Evidence being parsed by forhunt into a CSV (D-033).
+    conversions: Vec<crate::convert::Conversion>,
     pub(crate) help: bool,
     focus_search: bool,
     style: Style,
@@ -163,6 +165,7 @@ impl App {
             goto: None,
             note_edit: None,
             evidence_dlg: None,
+            conversions: Vec::new(),
             help: false,
             focus_search: false,
             detail: None,
@@ -180,38 +183,151 @@ impl App {
         let _ = std::thread::Builder::new()
             .name("fhv-cache-evict".into())
             .spawn(move || crate::settings::evict_cache(&cache, CACHE_MAX));
-        for f in files {
-            app.open(&f);
-        }
+        app.open_many(files);
         app
     }
 
-    /// Opens a file in a new tab (or switches to it if already open).
+    /// Opens a CSV in a new tab (or switches to it if already open); event
+    /// logs and NTFS files are parsed by forhunt first.
     pub fn open(&mut self, path: &Path) {
+        self.open_many(vec![path.to_path_buf()]);
+    }
+
+    /// Opens files picked or dropped together: CSVs each in a tab, all the
+    /// forhunt evidence (EVTX, $MFT, $J, folders) as one timeline.
+    pub fn open_many(&mut self, paths: Vec<PathBuf>) {
+        let (evidence, csvs): (Vec<PathBuf>, Vec<PathBuf>) = paths
+            .into_iter()
+            .partition(|p| crate::convert::is_evidence(p));
+        for p in csvs {
+            if self.open_table(&p) {
+                self.settings.add_recent(p);
+                self.settings.save();
+            }
+        }
+        if !evidence.is_empty() {
+            for p in &evidence {
+                self.settings.add_recent(p.clone());
+            }
+            self.settings.save();
+            self.conversions
+                .push(crate::convert::Conversion::start(evidence, &self.cache_dir));
+        }
+    }
+
+    fn open_table(&mut self, path: &Path) -> bool {
         if let Some(i) = self.tabs.iter().position(|t| t.path == path) {
             self.active = i;
-            return;
+            return true;
         }
         match Tab::open(path, &self.cache_dir) {
             Ok(t) => {
                 self.tabs.push(t);
                 self.active = self.tabs.len() - 1;
-                self.settings.add_recent(path.to_path_buf());
-                self.settings.save();
+                true
             }
-            Err(e) => self.error = Some(format!("{}: {e}", path.display())),
+            Err(e) => {
+                self.error = Some(format!("{}: {e}", path.display()));
+                false
+            }
+        }
+    }
+
+    /// Opens the CSVs of finished conversions; true while any is running.
+    fn poll_conversions(&mut self) -> bool {
+        let mut i = 0;
+        while i < self.conversions.len() {
+            let Some(r) = self.conversions[i].poll() else {
+                i += 1;
+                continue;
+            };
+            let c = self.conversions.remove(i);
+            match r {
+                Ok(done) => {
+                    if self.open_table(&done.csv) {
+                        if let Some(t) = self.tabs.get_mut(self.active) {
+                            t.origin = Some((c.label.clone(), c.evidence.clone()));
+                            // forhunt writes in input order (file by file):
+                            // show one timeline, oldest first.
+                            if t.sort.is_empty()
+                                && let Some(col) =
+                                    t.table.columns.iter().position(|n| n == "TimeCreated")
+                            {
+                                t.sort.push(SortKey { col, desc: false });
+                                t.requery();
+                            }
+                            t.status = Some(if done.cached {
+                                format!("{}: parsed earlier by forhunt (cache)", c.label)
+                            } else {
+                                format!(
+                                    "{}: {} events parsed by forhunt {} in {:.1} s",
+                                    c.label,
+                                    fmt_n(done.events),
+                                    crate::convert::FORHUNT_VERSION,
+                                    c.started.elapsed().as_secs_f64()
+                                )
+                            });
+                        }
+                        // `forhunt show <id> -p <evidence>` points at these inputs.
+                        self.settings.evidence = c.evidence.clone();
+                        self.settings.save();
+                    }
+                    if !done.warnings.is_empty() {
+                        self.error = Some(format!(
+                            "forhunt warnings for {}:\n{}",
+                            c.label,
+                            done.warnings.join("\n")
+                        ));
+                    }
+                }
+                Err(e) if e == "cancelled" => {}
+                Err(e) => self.error = Some(format!("{}: {e}", c.label)),
+            }
+        }
+        !self.conversions.is_empty()
+    }
+
+    /// One line per running conversion: progress and Cancel.
+    fn conversions_ui(&mut self, ui: &mut Ui) {
+        for c in &self.conversions {
+            ui.horizontal(|ui| {
+                let text = format!("forhunt: parsing {}", c.label);
+                match c.fraction() {
+                    Some(f) => {
+                        ui.add(
+                            egui::ProgressBar::new(f)
+                                .desired_width(320.0)
+                                .text(format!("{text} {:.0}%", f * 100.0)),
+                        );
+                    }
+                    None => {
+                        ui.spinner();
+                        ui.label(format!("{text}: opening…"));
+                    }
+                }
+                if ui.button("Cancel").clicked() {
+                    c.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
         }
     }
 
     fn open_dialog(&mut self) {
         if let Some(files) = rfd::FileDialog::new()
-            .add_filter("CSV / TSV", &["csv", "tsv", "txt", "tab", "psv"])
+            .add_filter(
+                "CSV, event logs, NTFS",
+                &["csv", "tsv", "txt", "tab", "psv", "evtx"],
+            )
             .add_filter("All files", &["*"])
             .pick_files()
         {
-            for f in files {
-                self.open(&f);
-            }
+            self.open_many(files);
+        }
+    }
+
+    fn open_folder_dialog(&mut self) {
+        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+            self.open_many(vec![dir]);
         }
     }
 
@@ -283,6 +399,14 @@ impl App {
                 if ui.button("Open…   Ctrl+O").clicked() {
                     ui.close();
                     self.open_dialog();
+                }
+                if ui
+                    .button("Open evidence folder…")
+                    .on_hover_text("every .evtx / $MFT / $J inside, parsed by forhunt into one timeline")
+                    .clicked()
+                {
+                    ui.close();
+                    self.open_folder_dialog();
                 }
                 ui.menu_button("Open recent", |ui| {
                     let recent = self.settings.recent.clone();
@@ -416,7 +540,7 @@ impl App {
                 };
                 if ui
                     .selectable_label(i == self.active, label)
-                    .on_hover_text(t.path.display().to_string())
+                    .on_hover_text(t.shown_path())
                     .clicked()
                 {
                     self.active = i;
@@ -610,8 +734,13 @@ impl App {
     }
 
     fn status_bar(&mut self, ui: &mut Ui) {
+        self.conversions_ui(ui);
         let Some(t) = self.tabs.get_mut(self.active) else {
-            ui.label("Open a CSV file: File > Open, drag and drop, or forhunt-viewer FILE");
+            if self.conversions.is_empty() {
+                ui.label(
+                    "Open a CSV, event logs (.evtx) or an evidence folder: File > Open, drag and drop, or forhunt-viewer PATH",
+                );
+            }
             return;
         };
         ui.horizontal(|ui| {
@@ -1804,15 +1933,18 @@ impl eframe::App for App {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
-        for p in dropped {
-            self.open(&p);
+        if !dropped.is_empty() {
+            self.open_many(dropped);
         }
         #[cfg(target_os = "macos")]
-        for p in crate::macos::take_opened() {
-            self.open(&p);
+        {
+            let opened = crate::macos::take_opened();
+            if !opened.is_empty() {
+                self.open_many(opened);
+            }
         }
         let tz = self.tz.name.clone();
-        let mut running = false;
+        let mut running = self.poll_conversions();
         for t in &mut self.tabs {
             running |= t.poll(&tz);
             if let Some(text) = t.clipboard.take() {
@@ -1825,7 +1957,7 @@ impl eframe::App for App {
         }
         self.shortcuts(&ctx);
         let title = match self.tab_ref() {
-            Some(t) => format!("{} — forhunt-viewer", t.path.display()),
+            Some(t) => format!("{} — forhunt-viewer", t.shown_path()),
             None => "forhunt-viewer".into(),
         };
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));

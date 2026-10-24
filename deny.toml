@@ -8,6 +8,9 @@ all-features = false
 version = 2
 yanked = "deny"
 ignore = [
+    # `encoding` (legacy code pages for ANSI strings in EVTX) is unmaintained,
+    # no known vulnerability; via forhunt-core -> evtx (same entry as forhunt).
+    { id = "RUSTSEC-2021-0153", reason = "transitive via forhunt-core/evtx; unmaintained, no vulnerability" },
     # zbus_names / zvariant / zvariant_derive were folded back into the zbus
     # crate (announcement: z-galaxy/zbus#2043); "unmaintained" as standalone
     # crates, no vulnerability. Pulled in by accesskit (screen readers on
@@ -51,3 +54,5 @@ allow-wildcard-paths = true
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# forhunt-core / forhunt-output, pinned to a release tag (D-033).
+allow-git = ["https://github.com/0xRD/forensic-hunter"]
