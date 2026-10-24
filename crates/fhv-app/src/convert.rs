@@ -13,7 +13,7 @@ use std::time::Instant;
 use forhunt_core::artifact::ParseOptions;
 
 /// forhunt version linked in (part of the cache key: a new parser rewrites).
-pub const FORHUNT_VERSION: &str = "0.2.1";
+pub const FORHUNT_VERSION: &str = "0.2.2";
 
 /// True if `path` is something forhunt parses rather than a CSV: a
 /// directory, or a file an artifact recognises by content or name.
@@ -248,6 +248,15 @@ fn file_safe(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forhunt_version_matches_the_lock_file() {
+        // Part of the cache key: it must follow the linked forhunt release.
+        let lock = include_str!("../../../Cargo.lock");
+        let i = lock.find("name = \"forhunt-core\"").unwrap();
+        let ver = lock[i..].lines().nth(1).unwrap();
+        assert_eq!(ver, format!("version = \"{FORHUNT_VERSION}\""));
+    }
 
     #[test]
     fn labels_and_evidence() {

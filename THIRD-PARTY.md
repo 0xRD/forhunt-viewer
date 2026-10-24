@@ -135,8 +135,8 @@ Some are platform-specific and only in the build for that OS.
 | foreign-types | 0.5.0 | MIT/Apache-2.0 | https://github.com/sfackler/foreign-types |
 | foreign-types-macros | 0.2.4 | MIT/Apache-2.0 | https://github.com/sfackler/foreign-types |
 | foreign-types-shared | 0.3.1 | MIT/Apache-2.0 | https://github.com/sfackler/foreign-types |
-| forhunt-core | 0.2.1 | MIT OR Apache-2.0 | https://github.com/0xRD/forensic-hunter |
-| forhunt-output | 0.2.1 | MIT OR Apache-2.0 | https://github.com/0xRD/forensic-hunter |
+| forhunt-core | 0.2.2 | MIT OR Apache-2.0 | https://github.com/0xRD/forensic-hunter |
+| forhunt-output | 0.2.2 | MIT OR Apache-2.0 | https://github.com/0xRD/forensic-hunter |
 | futures-core | 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs |
 | futures-io | 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs |
 | futures-lite | 2.6.1 | Apache-2.0 OR MIT | https://github.com/smol-rs/futures-lite |

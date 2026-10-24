@@ -29,7 +29,7 @@ Last update: 2026-10-22 (session 1)
   -22.75 %)
 
 ## In progress
-- v0.2.0 (2026-10-24): open EVTX / $MFT / $J / folders directly (D-033). v0.1.1 released 2026-10-24 (toolbar labels); v0.1.0 the same day: Linux/Windows from the Release workflow,
+- v0.2.1 (2026-10-24): forhunt 0.2.2, empty-window help. v0.2.0: open EVTX / $MFT / $J / folders directly (D-033). v0.1.1 released 2026-10-24 (toolbar labels); v0.1.0 the same day: Linux/Windows from the Release workflow,
   macOS .dmg built locally (D-031); all files verified against SHA256SUMS.
   Owner to test a browser-downloaded .dmg (Gatekeeper, Finder double-click).
 
