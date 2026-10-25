@@ -441,8 +441,8 @@ fn f3_visits_every_hit_in_view_order() {
 fn session_restores_bad_rows_only() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("ragged.csv");
-    // Large enough that indexing is still running when the session is
-    // applied to the second window.
+    // Large enough that indexing is usually still running when the session
+    // is applied to the second window.
     let mut s = String::from("a,b,c\n");
     for i in 0..400_000 {
         if i % 40_000 == 7 {
@@ -461,11 +461,12 @@ fn session_restores_bad_rows_only() {
     let session = crate::session::capture(&h.state().tabs[0]);
     let json = serde_json::to_string(&session).unwrap();
 
-    // Fresh window: apply the session before indexing finishes.
-    let mut h = harness(dir.path(), &file);
+    // Fresh window with its own cache: the session is applied before the
+    // bad-row set exists (and usually before indexing finishes; on a fast
+    // machine it may already be done, which must not matter).
+    let dir2 = tempfile::tempdir().unwrap();
+    let mut h = harness(dir2.path(), &file);
     let s2: crate::session::Session = serde_json::from_str(&json).unwrap();
-    eprintln!("ready at apply: {}", h.state().tabs[0].ready());
-    assert!(!h.state().tabs[0].ready());
     crate::session::apply(&mut h.state_mut().tabs[0], &s2);
     std::thread::sleep(Duration::from_millis(300));
     wait(&mut h, idle);
