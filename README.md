@@ -184,7 +184,7 @@ Command line: `forhunt-viewer [PATH...]` (CSV/TSV files, `.evtx`, `$MFT`,
 | F3 / Shift+F3 | next / previous match |
 | Ctrl+G | go to row (`#` column) |
 | Arrows, PgUp/PgDn, Ctrl+Home/End | move the selection |
-| Ctrl+C / Ctrl+Shift+C | copy cell / copy row (tab-separated) |
+| Ctrl+C / Ctrl+Shift+C | copy cell / copy row as indented JSON (right-click a cell for tab-separated) |
 | click / Shift+click a header | sort / add a sort column |
 | right click | header and cell menus |
 | Esc | cancel the running operation |

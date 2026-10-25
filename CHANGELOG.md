@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 (2026-10-25)
+
+- Arrow keys keep moving the selection after a click in the grid (they
+  also moved the keyboard focus to the next widget, so later presses were
+  lost).
+- Copy row (Ctrl+Shift+C) gives indented JSON: one field per line, empty
+  cells left out, JSON cells such as `Payload` nested as JSON. The
+  tab-separated copy stays in the cell menu.
+
 ## 0.3.0 (2026-10-25)
 
 Correctness release from a differential test against an independent Python

@@ -946,7 +946,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "csv-gen"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1461,7 +1461,7 @@ checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
 
 [[package]]
 name = "fhv-app"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1484,7 +1484,7 @@ dependencies = [
 
 [[package]]
 name = "fhv-bench"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1495,7 +1495,7 @@ dependencies = [
 
 [[package]]
 name = "fhv-engine"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "blake3",

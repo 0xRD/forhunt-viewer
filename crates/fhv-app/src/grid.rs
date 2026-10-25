@@ -221,6 +221,21 @@ pub fn show(
     state.page_rows = page;
     let max_top = n.saturating_sub(page) as f64;
 
+    // The grid uses the arrow keys itself: while it has focus, egui must
+    // not also move the focus to the next widget with them (the following
+    // presses would go to that widget instead of the selection).
+    if outer.has_focus() {
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                outer.id,
+                eframe::egui::EventFilter {
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    ..Default::default()
+                },
+            )
+        });
+    }
     // Keyboard and wheel, unless a text field has focus.
     let typing = ui
         .ctx()

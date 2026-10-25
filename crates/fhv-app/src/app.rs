@@ -368,7 +368,7 @@ impl App {
             self.goto = Some(String::new());
         }
         if copy_row && let Some(t) = self.tab() {
-            copy_selected_row(ctx, t);
+            copy_selected_row(ctx, t, false);
         }
         if copy
             && !typing
@@ -1180,8 +1180,16 @@ impl App {
                     cell_action = Some(CellAction::CopyCell(row, dc));
                     ui.close();
                 }
-                if ui.button("Copy row   Ctrl+Shift+C").clicked() {
-                    cell_action = Some(CellAction::CopyRow(row));
+                if ui.button("Copy row as JSON   Ctrl+Shift+C").clicked() {
+                    cell_action = Some(CellAction::CopyRow(row, false));
+                    ui.close();
+                }
+                if ui
+                    .button("Copy row (tab-separated)")
+                    .on_hover_text("one line, for pasting into a spreadsheet")
+                    .clicked()
+                {
+                    cell_action = Some(CellAction::CopyRow(row, true));
                     ui.close();
                 }
                 if ui.button("Tag / untag").clicked() {
@@ -1292,9 +1300,9 @@ impl App {
                     t.grid.selected_col = dc;
                     copy_selected_cell(ui.ctx(), t);
                 }
-                CellAction::CopyRow(row) => {
+                CellAction::CopyRow(row, tsv) => {
                     t.grid.selected = Some(row);
-                    copy_selected_row(ui.ctx(), t);
+                    copy_selected_row(ui.ctx(), t, tsv);
                 }
                 CellAction::Tag(row) => {
                     if let Some(r) = t.view.row_at(row) {
@@ -1807,7 +1815,10 @@ impl App {
                             ("Arrows, PgUp/PgDn", "move selection"),
                             ("Ctrl+Home / Ctrl+End", "first / last row"),
                             ("Ctrl+C", "copy cell"),
-                            ("Ctrl+Shift+C", "copy row (tab-separated)"),
+                            (
+                                "Ctrl+Shift+C",
+                                "copy row as JSON (right-click: tab-separated)",
+                            ),
                             ("Click header", "sort (again: descending, then off)"),
                             ("Shift+click header", "add a sort column"),
                             ("Right click", "header and cell menus"),
@@ -1924,7 +1935,8 @@ enum HeaderAction {
 
 enum CellAction {
     CopyCell(u64, usize),
-    CopyRow(u64),
+    /// Row, as tab-separated text (else indented JSON).
+    CopyRow(u64, bool),
     Tag(u64),
     Note(u64),
     FilterEq(u64, usize, bool),
@@ -2113,13 +2125,42 @@ fn copy_selected_cell(ctx: &egui::Context, t: &mut Tab) {
     ctx.copy_text(text);
 }
 
-fn copy_selected_row(ctx: &egui::Context, t: &mut Tab) {
+fn copy_selected_row(ctx: &egui::Context, t: &mut Tab, tsv: bool) {
     let Some(r) = t.grid.selected.and_then(|p| t.view.row_at(p)) else {
         return;
     };
     if let Ok(f) = t.table.row_fields(r as u64) {
-        ctx.copy_text(row_tsv(t, &f));
+        ctx.copy_text(if tsv { row_tsv(t, &f) } else { row_json(t, &f) });
     }
+}
+
+/// The row as an indented JSON object for pasting into notes or a ticket:
+/// visible columns in display order, empty cells left out; a cell that is
+/// itself a JSON object or array (`Payload`) is embedded as JSON, not as
+/// an escaped string. Values are not otherwise changed.
+fn row_json(t: &Tab, fields: &[String]) -> String {
+    let mut s = String::from("{");
+    let mut first = true;
+    for &c in &t.order {
+        let v = fields.get(c).map_or("", String::as_str);
+        if v.trim().is_empty() {
+            continue;
+        }
+        if !first {
+            s.push(',');
+        }
+        first = false;
+        let name = t.table.columns.get(c).map_or("", String::as_str);
+        s.push_str(&serde_json::to_string(name).unwrap_or_default());
+        s.push(':');
+        if pretty_json(v).is_some() {
+            s.push_str(v.trim());
+        } else {
+            s.push_str(&serde_json::to_string(v).unwrap_or_default());
+        }
+    }
+    s.push('}');
+    pretty_json(&s).unwrap_or(s)
 }
 
 /// Re-indents a JSON object/array for reading without changing it: keys
@@ -2325,6 +2366,11 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
+}
+
+#[cfg(test)]
+pub fn row_json_for_test(t: &Tab, fields: &[String]) -> String {
+    row_json(t, fields)
 }
 
 #[cfg(test)]

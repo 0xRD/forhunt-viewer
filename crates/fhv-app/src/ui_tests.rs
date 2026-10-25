@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use eframe::egui;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use fhv_engine::filter::Op;
@@ -827,4 +828,81 @@ fn date_order_override_and_excluded_cells_on_chips() {
     );
     run(&mut h);
     assert_eq!(h.state().tabs[0].view.len(), 24);
+}
+
+/// Arrow keys keep moving the selection after a click in the grid: they
+/// must not also move egui's focus to the next widget (which then swallowed
+/// every later arrow press).
+#[test]
+fn arrow_keys_keep_moving_the_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    // Click a cell in the body, well below the header and filter rows.
+    let pos = egui::pos2(300.0, 300.0);
+    h.input_mut().events.push(egui::Event::PointerMoved(pos));
+    h.step();
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+    }
+    let start = h.state().tabs[0]
+        .grid
+        .selected
+        .expect("click selects a row");
+    for _ in 0..5 {
+        h.key_press(egui::Key::ArrowDown);
+        h.step();
+    }
+    assert_eq!(h.state().tabs[0].grid.selected, Some(start + 5));
+    for _ in 0..2 {
+        h.key_press(egui::Key::ArrowUp);
+        h.step();
+    }
+    assert_eq!(h.state().tabs[0].grid.selected, Some(start + 3));
+    let col = h.state().tabs[0].grid.selected_col;
+    for _ in 0..2 {
+        h.key_press(egui::Key::ArrowRight);
+        h.step();
+    }
+    h.key_press(egui::Key::ArrowLeft);
+    h.step();
+    assert_eq!(h.state().tabs[0].grid.selected_col, col + 1);
+    assert_eq!(h.state().tabs[0].grid.selected, Some(start + 3));
+}
+
+/// "Copy row" gives indented JSON that reads well once pasted: one field per
+/// line, empty cells left out, a JSON cell (Payload) nested as JSON.
+#[test]
+fn copy_row_is_readable_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("row.csv");
+    std::fs::write(
+        &file,
+        "RecordNumber,EventId,UserName,RemoteHost,Payload\n\
+         320,4673,PC01$,,\"{\"\"SubjectUserName\"\":\"\"PC01$\"\",\"\"ProcessName\"\":\"\"C:\\\\Windows\\\\System32\\\\lsass.exe\"\"}\"\n",
+    )
+    .unwrap();
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    let t = &h.state().tabs[0];
+    let f = t.table.row_fields(0).unwrap();
+    let text = crate::app::row_json_for_test(t, &f);
+    assert_eq!(
+        text,
+        "{\n  \"RecordNumber\": \"320\",\n  \"EventId\": \"4673\",\n  \"UserName\": \"PC01$\",\n  \"Payload\": {\n    \"SubjectUserName\": \"PC01$\",\n    \"ProcessName\": \"C:\\\\Windows\\\\System32\\\\lsass.exe\"\n  }\n}"
+    );
+    // Valid JSON, same values as the file.
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        v["Payload"]["ProcessName"],
+        "C:\\Windows\\System32\\lsass.exe"
+    );
+    assert!(v.get("RemoteHost").is_none());
 }
