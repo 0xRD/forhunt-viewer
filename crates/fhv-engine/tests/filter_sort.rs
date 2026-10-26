@@ -258,6 +258,7 @@ fn naive_pred(p: &Pred, r: &[String]) -> bool {
             Op::Lt(x) => range(c, v, None, Some(x), true, false, cs),
             Op::Le(x) => range(c, v, None, Some(x), true, true, cs),
             Op::Between(a, b) => range(c, v, Some(a), Some(b), true, true, cs),
+            Op::Not(_) => unreachable!("not generated"),
         }
     };
     match p.target {

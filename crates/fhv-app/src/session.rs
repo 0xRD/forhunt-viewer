@@ -37,6 +37,9 @@ pub struct Session {
 #[derive(Serialize, Deserialize)]
 pub struct ColFilterSer {
     pub quick: String,
+    /// Absent in sessions of 0.3.1 and older.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quick_not: bool,
     pub conds: Vec<Op>,
     pub any: bool,
     pub case_sensitive: bool,
@@ -68,6 +71,7 @@ pub fn capture(tab: &Tab) -> Session {
                     name(c),
                     ColFilterSer {
                         quick: f.quick.clone(),
+                        quick_not: f.quick_not,
                         conds: f.conds.clone(),
                         any: f.any,
                         case_sensitive: f.case_sensitive,
@@ -130,6 +134,7 @@ pub fn apply(tab: &mut Tab, s: &Session) -> Vec<String> {
         if let Some(c) = find(n) {
             tab.filters[c] = ColFilter {
                 quick: f.quick.clone(),
+                quick_not: f.quick_not,
                 conds: f.conds.clone(),
                 any: f.any,
                 case_sensitive: f.case_sensitive,

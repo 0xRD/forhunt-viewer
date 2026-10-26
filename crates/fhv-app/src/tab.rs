@@ -4,8 +4,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use eframe::egui::Color32;
@@ -18,6 +18,7 @@ use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
 use crate::grid::{GridSource, GridState};
+use crate::settings::RowNumMode;
 use crate::tz;
 
 /// Display columns before the file columns.
@@ -29,6 +30,9 @@ pub const DC_FIRST: usize = 2;
 pub struct ColFilter {
     /// Quick "contains" text from the filter row.
     pub quick: String,
+    /// The quick text is inverted (does not contain).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quick_not: bool,
     /// Further conditions on the column.
     pub conds: Vec<Op>,
     /// Conditions combine with OR instead of AND.
@@ -45,6 +49,21 @@ pub struct ColFilter {
 impl ColFilter {
     pub fn is_active(&self) -> bool {
         !self.quick.is_empty() || !self.conds.is_empty() || self.values.is_some()
+    }
+
+    /// Inverts one chip: the quick text (`None`), the value selection
+    /// (`Some(usize::MAX)`) or condition `i`. Natural opposites swap
+    /// (`contains` / `not contains`...), other operators get a NOT.
+    pub fn invert(&mut self, i: Option<usize>) {
+        match i {
+            None => self.quick_not = !self.quick_not,
+            Some(usize::MAX) => self.values = self.values.take().map(|o| o.negated()),
+            Some(i) => {
+                if let Some(o) = self.conds.get_mut(i) {
+                    *o = o.negated();
+                }
+            }
+        }
     }
 
     /// Whether the value-list selection keeps value `v`.
@@ -164,6 +183,10 @@ pub struct Tab {
     /// Texts of the # column for the prepared rows.
     nums: Vec<String>,
     nums_first: u64,
+    /// The file's own row-number column, once detected after indexing
+    /// (D-042).
+    detected: Arc<OnceLock<Option<usize>>>,
+    pub rownum_mode: RowNumMode,
 }
 
 fn initial_width(name: &str) -> f32 {
@@ -197,12 +220,18 @@ impl Tab {
         opts.dialect = dialect;
         let table = Arc::new(Table::open(path, opts)?);
         let (tx, rx) = channel();
+        let detected = Arc::new(OnceLock::new());
         {
             let t = table.clone();
+            let det = detected.clone();
             std::thread::Builder::new()
                 .name("fhv-index".into())
                 .spawn(move || {
-                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| t.build()));
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        t.build()?;
+                        let _ = det.set(fhv_engine::rownum::detect_table(&t));
+                        Ok::<(), fhv_engine::Error>(())
+                    }));
                     let _ = tx.send(match r {
                         Ok(r) => r.map_err(|e| e.to_string()),
                         Err(_) => Err("internal error while indexing (panic)".into()),
@@ -225,7 +254,7 @@ impl Tab {
             load_error: None,
             filters: vec![ColFilter::default(); ncols],
             search: String::new(),
-            search_filter: false,
+            search_filter: true,
             search_hits: None,
             hits_for: String::new(),
             tagged_only: false,
@@ -254,6 +283,8 @@ impl Tab {
             last_query: None,
             nums: Vec::new(),
             nums_first: 0,
+            detected,
+            rownum_mode: RowNumMode::Auto,
             clipboard: None,
             bad: None,
             hits_in_view: None,
@@ -329,6 +360,10 @@ impl Tab {
             .filter(|&c| {
                 !matches!(self.kind(c), Kind::Text)
                     && self.filters[c].conds.iter().any(|o| {
+                        let o = match o {
+                            Op::Not(x) => &**x,
+                            o => o,
+                        };
                         matches!(
                             o,
                             Op::Gt(_) | Op::Ge(_) | Op::Lt(_) | Op::Le(_) | Op::Between(..)
@@ -361,7 +396,8 @@ impl Tab {
                 })
             };
             if !f.quick.is_empty() {
-                all.push(pred(Op::Contains(f.quick.clone())));
+                let q = Op::Contains(f.quick.clone());
+                all.push(pred(if f.quick_not { q.negated() } else { q }));
             }
             if !f.conds.is_empty() {
                 let xs: Vec<Expr> = f.conds.iter().cloned().map(pred).collect();
@@ -744,9 +780,55 @@ impl Tab {
         DC_FIRST + self.order.len()
     }
 
+    /// The file column used as the row number: the detected one, unless
+    /// the mode says to show the viewer's own `#` (D-042).
+    pub fn num_col(&self) -> Option<usize> {
+        match self.rownum_mode {
+            RowNumMode::Always => None,
+            _ => self.detected_col(),
+        }
+    }
+
+    /// The detected row-number column (whatever the mode).
+    pub fn detected_col(&self) -> Option<usize> {
+        self.detected.get().copied().flatten()
+    }
+
+    /// Whether the viewer's own `#` column is shown.
+    pub fn show_hash(&self) -> bool {
+        match self.rownum_mode {
+            RowNumMode::Always => true,
+            RowNumMode::Auto => self.num_col().is_none(),
+            RowNumMode::Never => false,
+        }
+    }
+
+    /// Row number of data row `r` as shown: the file's value when a column
+    /// is used, else its position in the file.
+    pub fn row_number(&self, r: u32) -> String {
+        if let Some(c) = self.num_col()
+            && let Ok(f) = self.table.row_fields(r as u64)
+            && let Some(v) = f.get(c)
+        {
+            return v.clone();
+        }
+        (r as u64 + 1).to_string()
+    }
+
+    /// Data row for the number `n` typed in "go to row".
+    pub fn row_of_number(&self, n: u64) -> Option<u32> {
+        let r = match self.num_col() {
+            Some(c) => fhv_engine::rownum::find_in_table(&self.table, c, n)?,
+            None => n.checked_sub(1)?,
+        };
+        u32::try_from(r)
+            .ok()
+            .filter(|&r| (r as u64) < self.table.row_count())
+    }
+
     /// Syncs grid widths from the per-column widths.
     pub fn sync_widths(&mut self) {
-        let mut w = vec![26.0, 70.0];
+        let mut w = vec![26.0, if self.show_hash() { 70.0 } else { 0.0 }];
         w.extend(
             self.order
                 .iter()
@@ -877,15 +959,18 @@ impl GridSource for TabSource<'_> {
 
     fn prepare(&mut self, rows: Range<u64>) {
         self.tab.nums_first = rows.start;
-        self.tab.nums = rows
-            .clone()
-            .map(|p| {
-                self.tab
-                    .view
-                    .row_at(p)
-                    .map_or(String::new(), |r| (r as u64 + 1).to_string())
-            })
-            .collect();
+        self.tab.nums = if self.tab.show_hash() {
+            rows.clone()
+                .map(|p| {
+                    self.tab
+                        .view
+                        .row_at(p)
+                        .map_or(String::new(), |r| (r as u64 + 1).to_string())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let key = (self.tab.view_gen, rows.clone());
         if self.tab.rows_key.as_ref() == Some(&key) {
             return;

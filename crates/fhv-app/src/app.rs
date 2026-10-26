@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::grid::{self, Callbacks, Style};
 use crate::session;
+use crate::settings::RowNumMode;
 use crate::settings::{Settings, dirs};
 use crate::tab::{ColFilter, DC_FIRST, DC_NUM, DC_TAG, Tab};
 use crate::tz;
@@ -69,8 +70,9 @@ pub fn op_text(op: &Op) -> String {
             format!("{} [{}{}]", op.label(), shown.join(", "), more)
         }
         Op::Between(a, b) => format!("between {a} and {b}"),
+        Op::Not(x) => format!("NOT ({})", op_text(x)),
+        Op::NotEquals(v) => format!("≠ {v:?}"),
         Op::Equals(v)
-        | Op::NotEquals(v)
         | Op::Contains(v)
         | Op::NotContains(v)
         | Op::BeginsWith(v)
@@ -112,7 +114,7 @@ struct ExportDlg {
 pub struct App {
     pub(crate) tabs: Vec<Tab>,
     active: usize,
-    settings: Settings,
+    pub(crate) settings: Settings,
     tz: tz::Display,
     cache_dir: PathBuf,
     error: Option<String>,
@@ -224,7 +226,8 @@ impl App {
             return true;
         }
         match Tab::open(path, &self.cache_dir) {
-            Ok(t) => {
+            Ok(mut t) => {
+                self.apply_prefs(&mut t);
                 self.tabs.push(t);
                 self.active = self.tabs.len() - 1;
                 true
@@ -388,6 +391,18 @@ impl App {
         }
     }
 
+    /// Settings a new tab starts with: the remembered "only matches" choice
+    /// (D-040) and the row-number mode of this file (D-042).
+    fn apply_prefs(&self, t: &mut Tab) {
+        t.search_filter = self.settings.search_only_matches;
+        t.rownum_mode = self
+            .settings
+            .row_num
+            .get(&t.path.to_string_lossy().into_owned())
+            .copied()
+            .unwrap_or_default();
+    }
+
     /// Reopens tab `i` with the given header / delimiter (state of the old
     /// tab is dropped: the columns may differ). Errors go to the error box.
     pub fn reopen_with(&mut self, i: usize, header: bool, delim: u8) {
@@ -398,6 +413,7 @@ impl App {
         match Tab::open_with(&old.path.clone(), &self.cache_dir, Some(d)) {
             Ok(mut t) => {
                 t.origin = old.origin.clone();
+                self.apply_prefs(&mut t);
                 self.tabs[i].cancel_job();
                 self.tabs[i] = t;
                 self.active = i;
@@ -505,6 +521,44 @@ impl App {
                     .changed()
                 {
                     self.settings.save();
+                }
+                if let Some(t) = self.tabs.get_mut(self.active) {
+                    let label = match t.detected_col() {
+                        Some(c) => format!("Row numbers: file column {}", t.table.columns[c]),
+                        None => "Row numbers: viewer's #".to_string(),
+                    };
+                    ui.menu_button(label, |ui| {
+                        for (m, name, tip) in [
+                            (
+                                RowNumMode::Auto,
+                                "Auto",
+                                "hide # when the file has its own row-number column",
+                            ),
+                            (
+                                RowNumMode::Always,
+                                "Always show #",
+                                "the viewer's # (file position); Go to row uses it",
+                            ),
+                            (RowNumMode::Never, "Never show #", "no # column"),
+                        ] {
+                            if ui
+                                .selectable_label(t.rownum_mode == m, name)
+                                .on_hover_text(tip)
+                                .clicked()
+                            {
+                                ui.close();
+                                t.rownum_mode = m;
+                                t.sync_widths();
+                                let key = t.path.to_string_lossy().into_owned();
+                                if m == RowNumMode::Auto {
+                                    self.settings.row_num.remove(&key);
+                                } else {
+                                    self.settings.row_num.insert(key, m);
+                                }
+                                self.settings.save();
+                            }
+                        }
+                    });
                 }
                 if ui.button("Columns…").clicked() {
                     ui.close();
@@ -649,16 +703,15 @@ impl App {
                 t.grid.selected = Some(p);
                 grid::scroll_to(&mut t.grid, p);
             }
-            let has_search = !t.search.is_empty();
             if ui
-                .add_enabled(
-                    has_search || t.search_filter,
-                    egui::Checkbox::new(&mut t.search_filter, "only matches"),
+                .checkbox(&mut t.search_filter, "only matches")
+                .on_hover_text(
+                    "hide the rows that do not contain the search text (your choice is remembered)",
                 )
-                .on_hover_text("hide the rows that do not contain the search text")
-                .on_disabled_hover_text("type a search first: this hides the rows without it")
                 .changed()
             {
+                self.settings.search_only_matches = t.search_filter;
+                self.settings.save();
                 t.requery();
             }
             ui.separator();
@@ -687,7 +740,7 @@ impl App {
             let any = t.filters.iter().any(ColFilter::is_active)
                 || t.tagged_only
                 || t.bad_only
-                || t.search_filter;
+                || (t.search_filter && !t.search.is_empty());
             if ui
                 .add_enabled(any, egui::Button::new("Clear filters"))
                 .clicked()
@@ -697,7 +750,11 @@ impl App {
                 }
                 t.tagged_only = false;
                 t.bad_only = false;
-                t.search_filter = false;
+                // The search text is a filter too; the "only matches" box
+                // keeps the user's choice (D-040).
+                if t.search_filter {
+                    t.search.clear();
+                }
                 t.requery();
             }
             if ui
@@ -719,8 +776,9 @@ impl App {
             )
             .on_hover_text(tip);
         });
-        // Filter chips.
+        // Filter chips. Clicking one inverts it (NOT), its x removes it.
         let mut remove: Option<(usize, Option<usize>)> = None;
+        let mut invert: Option<(usize, Option<usize>)> = None;
         let has_chips = t.filters.iter().any(ColFilter::is_active) || !t.sort.is_empty();
         // Always one line (even empty) so the grid does not jump when the
         // first filter or sort appears.
@@ -743,22 +801,25 @@ impl App {
                     };
                     let tip = |extra: &str| -> String {
                         if extra.is_empty() {
-                            "remove".into()
+                            CHIP_TIP.into()
                         } else {
                             format!(
-                                "remove. Matches the UTC values in the file, not the {} times shown",
+                                "{CHIP_TIP}. Matches the UTC values in the file, not the {} times shown",
                                 t.tz_display().name
                             )
                         }
                     };
                     if !f.quick.is_empty() {
                         let n = note(None);
-                        if ui
-                            .button(chip_text(format!("{name} contains {:?}{n}  ×", f.quick), n))
-                            .on_hover_text(tip(n))
-                            .clicked()
-                        {
-                            remove = Some((c, None));
+                        let text = if f.quick_not {
+                            format!("{name} does not contain {:?}{n}", f.quick)
+                        } else {
+                            format!("{name} contains {:?}{n}", f.quick)
+                        };
+                        match chip(ui, text, n, f.quick_not, &tip(n)) {
+                            Chip::Invert => invert = Some((c, None)),
+                            Chip::Remove => remove = Some((c, None)),
+                            Chip::None => {}
                         }
                     }
                     for (i, op) in f.conds.iter().enumerate() {
@@ -776,29 +837,37 @@ impl App {
                         let hover = if x.is_empty() {
                             tip(n)
                         } else {
-                            "remove. Cells that are blank or cannot be read as this column's \
-                             type cannot be compared and are left out by this condition"
-                                .into()
+                            format!(
+                                "{CHIP_TIP}. Cells that are blank or cannot be read as this column's \
+                                 type cannot be compared and are left out by this condition"
+                            )
                         };
-                        if ui
-                            .button(chip_text(
-                                format!("{joiner}{name} {}{n}{x}  ×", op_text(op)),
-                                if x.is_empty() { n } else { &x },
-                            ))
-                            .on_hover_text(hover)
-                            .clicked()
-                        {
-                            remove = Some((c, Some(i)));
+                        let text = format!("{joiner}{name} {}{n}{x}", op_text(op));
+                        match chip(
+                            ui,
+                            text,
+                            if x.is_empty() { n } else { &x },
+                            is_negated(op),
+                            &hover,
+                        ) {
+                            Chip::Invert => invert = Some((c, Some(i))),
+                            Chip::Remove => remove = Some((c, Some(i))),
+                            Chip::None => {}
                         }
                     }
                     if let Some(op) = &f.values {
                         let n = note(Some(op));
-                        if ui
-                            .button(chip_text(format!("{name} {}{n}  ×", op_text(op)), n))
-                            .on_hover_text(format!("{} (exact values)", tip(n)))
-                            .clicked()
-                        {
-                            remove = Some((c, Some(usize::MAX)));
+                        let text = format!("{name} {}{n}", op_text(op));
+                        match chip(
+                            ui,
+                            text,
+                            n,
+                            is_negated(op),
+                            &format!("{} (exact values)", tip(n)),
+                        ) {
+                            Chip::Invert => invert = Some((c, Some(usize::MAX))),
+                            Chip::Remove => remove = Some((c, Some(usize::MAX))),
+                            Chip::None => {}
                         }
                     }
                 }
@@ -818,6 +887,10 @@ impl App {
                 }
             }
         });
+        if let Some((c, i)) = invert {
+            t.filters[c].invert(i);
+            t.requery();
+        }
         if let Some((c, i)) = remove {
             match i {
                 None => t.filters[c].quick.clear(),
@@ -849,6 +922,16 @@ impl App {
             ));
             if let Some(ms) = t.last_ms {
                 ui.label(RichText::new(format!("({ms:.0} ms)")).weak());
+            }
+            if let Some(r) = t.grid.selected.and_then(|p| t.view.row_at(p)) {
+                let col = t.num_col().map(|c| t.table.columns[c].clone());
+                ui.separator();
+                ui.label(format!("row {}", t.row_number(r)))
+                    .on_hover_text(format!(
+                        "{}; file row {}",
+                        col.map_or("viewer's row number".to_string(), |c| format!("column {c}")),
+                        fmt_n(r as u64 + 1)
+                    ));
             }
             ui.separator();
             if let Some((what, frac)) = t.progress_text() {
@@ -936,7 +1019,13 @@ impl App {
             return;
         };
         ui.horizontal(|ui| {
-            ui.heading(format!("Row {}", row as u64 + 1));
+            let num = t.row_number(row);
+            if t.num_col().is_some() {
+                ui.heading(format!("Row {num}"))
+                    .on_hover_text(format!("file row {}", fmt_n(row as u64 + 1)));
+            } else {
+                ui.heading(format!("Row {}", row as u64 + 1));
+            }
             let tagged = t.tags.contains_key(&row);
             if ui
                 .button(if tagged { "★ untag" } else { "☆ tag" })
@@ -1731,6 +1820,14 @@ impl App {
                 self.reopen_dlg = None;
             }
         }
+        let goto_hint = match self.tabs.get(self.active) {
+            Some(t) => match t.num_col() {
+                Some(c) => format!("row number ({} column)", t.table.columns[c]),
+                None if t.show_hash() => "row number (# column)".to_string(),
+                None => "row number (file row)".to_string(),
+            },
+            None => String::new(),
+        };
         if let Some(text) = &mut self.goto {
             let mut done = false;
             let mut open = true;
@@ -1738,8 +1835,7 @@ impl App {
                 .open(&mut open)
                 .collapsible(false)
                 .show(ctx, |ui| {
-                    let r =
-                        ui.add(egui::TextEdit::singleline(text).hint_text("row number (# column)"));
+                    let r = ui.add(egui::TextEdit::singleline(text).hint_text(goto_hint));
                     r.request_focus();
                     if ui.input(|i| i.key_pressed(Key::Enter)) {
                         done = true;
@@ -1750,8 +1846,7 @@ impl App {
                     text.trim().replace(['_', ','], "").parse::<u64>(),
                     self.tabs.get_mut(self.active),
                 ) {
-                    let r = n.checked_sub(1).and_then(|r| u32::try_from(r).ok());
-                    match r.and_then(|r| t.view.position_of(r)) {
+                    match t.row_of_number(n).and_then(|r| t.view.position_of(r)) {
                         Some(p) => {
                             t.grid.selected = Some(p);
                             grid::scroll_to(&mut t.grid, p);
@@ -2007,6 +2102,9 @@ fn excluded_note(t: &Tab, c: usize) -> String {
 
 /// Operators that match text (not ranges or blanks).
 fn is_text_op(op: &Op) -> bool {
+    if let Op::Not(x) = op {
+        return is_text_op(x);
+    }
     !matches!(
         op,
         Op::Gt(_)
@@ -2017,6 +2115,49 @@ fn is_text_op(op: &Op) -> bool {
             | Op::IsBlank
             | Op::IsNotBlank
     )
+}
+
+const CHIP_TIP: &str = "Click to invert, x to remove";
+
+/// Operators that exclude what their positive form matches.
+fn is_negated(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::NotEquals(_) | Op::NotContains(_) | Op::NotIn(_) | Op::IsNotBlank | Op::Not(_)
+    )
+}
+
+enum Chip {
+    None,
+    Invert,
+    Remove,
+}
+
+/// A filter chip: the label inverts it when clicked, the x removes it. An
+/// inverted chip has its own tint.
+fn chip(ui: &mut Ui, text: String, note: &str, negated: bool, tip: &str) -> Chip {
+    let mut rt = chip_text(text, note);
+    let b = |label: RichText| {
+        let mut b = egui::Button::new(label);
+        if negated {
+            b = b.fill(Color32::from_rgba_unmultiplied(200, 70, 70, 60));
+        }
+        b
+    };
+    if negated {
+        rt = rt.italics();
+    }
+    let mut out = Chip::None;
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 1.0;
+        if ui.add(b(rt)).on_hover_text(tip).clicked() {
+            out = Chip::Invert;
+        }
+        if ui.add(b(RichText::new("×"))).on_hover_text(tip).clicked() {
+            out = Chip::Remove;
+        }
+    });
+    out
 }
 
 /// Chip label, in the warning colour when it carries a note.

@@ -15,6 +15,23 @@ pub struct Settings {
     /// Evidence path used in copied `forhunt show` commands.
     pub evidence: String,
     pub detail_pane: bool,
+    /// Last choice of the global search's "only matches" box (D-040).
+    pub search_only_matches: bool,
+    /// Row-number column mode per file path (D-042); absent = Auto.
+    pub row_num: std::collections::BTreeMap<String, RowNumMode>,
+}
+
+/// What to do with the viewer's own `#` column when the file has a
+/// row-number column of its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RowNumMode {
+    /// Hide `#` when the file's column is detected.
+    #[default]
+    Auto,
+    /// Always show `#`, numbering file rows.
+    Always,
+    /// Never show `#`.
+    Never,
 }
 
 impl Default for Settings {
@@ -25,6 +42,8 @@ impl Default for Settings {
             recent: Vec::new(),
             evidence: String::new(),
             detail_pane: true,
+            search_only_matches: true,
+            row_num: Default::default(),
         }
     }
 }

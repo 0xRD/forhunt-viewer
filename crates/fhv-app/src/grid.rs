@@ -289,11 +289,16 @@ pub fn show(
                 sel = Some(last);
             }
         }
-        if left {
-            state.selected_col = state.selected_col.saturating_sub(1);
+        // Hidden (zero-width) columns are skipped.
+        if left
+            && let Some(c) = (0..state.selected_col)
+                .rev()
+                .find(|&c| state.widths[c] > 0.0)
+        {
+            state.selected_col = c;
         }
-        if right && state.selected_col + 1 < ncols {
-            state.selected_col += 1;
+        if right && let Some(c) = (state.selected_col + 1..ncols).find(|&c| state.widths[c] > 0.0) {
+            state.selected_col = c;
         }
         let new = sel.map(|s| s as u64);
         if new != state.selected {

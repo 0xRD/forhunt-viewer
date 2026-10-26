@@ -188,7 +188,42 @@ fn typing_in_search_and_filter_row() {
     h.step();
     h.get_by_label("filter User").type_text("jdoe");
     h.step();
-    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 250);
+    // "only matches" is on by default (D-040): the search filters too
+    // (msg 99, 990..999 by jdoe: rows 992 and 996).
+    assert!(h.state().tabs[0].search_filter);
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 2);
+}
+
+/// D-040: "only matches" starts on, the last choice is remembered in the
+/// settings and wins for the next file; Clear filters keeps the choice.
+#[test]
+fn only_matches_default_and_remembered_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    assert!(Settings::default().search_only_matches);
+    assert!(h.state().tabs[0].search_filter);
+    h.state_mut().tabs[0].search = "msg 99".into();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 11);
+    h.get_by_label("only matches").click();
+    h.step();
+    assert!(!h.state().settings.search_only_matches);
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 1000);
+    // Tick it again, then Clear filters empties the search, keeps the box.
+    h.state_mut().tabs[0].search_filter = true;
+    h.state_mut().tabs[0].requery();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 11);
+    h.get_by_label("Clear filters").click();
+    h.step();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 1000);
+    assert!(h.state().tabs[0].search.is_empty());
+    // A tab opened now starts with the remembered (off) choice.
+    let other = dir.path().join("other.csv");
+    std::fs::write(&other, "a,b\n1,2\n").unwrap();
+    h.state_mut().open(&other);
+    h.step();
+    assert!(!h.state().tabs[1].search_filter);
 }
 
 /// Review R-001 / R-002: the filter editor survives tab switches and being
@@ -905,4 +940,134 @@ fn copy_row_is_readable_json() {
         "C:\\Windows\\System32\\lsass.exe"
     );
     assert!(v.get("RemoteHost").is_none());
+}
+
+/// D-040: clicking a chip inverts it, its x removes it; the rows after an
+/// inversion are the complement of those before; inversion is saved in
+/// sessions.
+#[test]
+fn chip_click_inverts_and_x_removes() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    let rows = |h: &Harness<'static, App>| h.state().tabs[0].view.iter().collect::<Vec<_>>();
+    let settle = |h: &mut Harness<'static, App>, n: u64| {
+        wait(h, |a| idle(a) && a.tabs[0].view.len() == n);
+        h.run_steps(2);
+    };
+    h.state_mut().tabs[0].filters[2].conds = vec![Op::Equals("jdoe".into())];
+    h.state_mut().tabs[0].requery();
+    settle(&mut h, 250);
+    let before = rows(&h);
+    h.get_by_label_contains("User equals").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().tabs[0].filters[2].conds,
+        vec![Op::NotEquals("jdoe".into())]
+    );
+    settle(&mut h, 750);
+    let after = rows(&h);
+    assert!(after.iter().all(|r| !before.contains(r)));
+    assert_eq!(before.len() + after.len(), 1000);
+    h.get_by_label_contains("User ≠").click();
+    h.run_steps(2);
+    settle(&mut h, 250);
+    assert_eq!(rows(&h), before);
+
+    // An operator without opposite is wrapped, and restored.
+    h.state_mut().tabs[0].filters[2].conds = vec![Op::Regex("^j".into())];
+    h.state_mut().tabs[0].requery();
+    settle(&mut h, 250);
+    h.get_by_label_contains("User regex").click();
+    h.run_steps(2);
+    assert!(matches!(h.state().tabs[0].filters[2].conds[0], Op::Not(_)));
+    settle(&mut h, 750);
+    // Saved in a session.
+    let json = serde_json::to_string(&crate::session::capture(&h.state().tabs[0])).unwrap();
+    let s2: crate::session::Session = serde_json::from_str(&json).unwrap();
+    h.state_mut().tabs[0].filters[2].conds.clear();
+    crate::session::apply(&mut h.state_mut().tabs[0], &s2);
+    assert!(matches!(h.state().tabs[0].filters[2].conds[0], Op::Not(_)));
+    h.run_steps(2);
+    h.get_by_label_contains("User NOT").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().tabs[0].filters[2].conds,
+        vec![Op::Regex("^j".into())]
+    );
+
+    // Quick text chip.
+    h.state_mut().tabs[0].filters[2].conds.clear();
+    h.state_mut().tabs[0].filters[2].quick = "jd".into();
+    h.state_mut().tabs[0].requery();
+    settle(&mut h, 250);
+    h.get_by_label_contains("User contains").click();
+    h.run_steps(2);
+    assert!(h.state().tabs[0].filters[2].quick_not);
+    settle(&mut h, 750);
+
+    // The x removes.
+    h.get_all_by_label("×").last().unwrap().click();
+    h.run_steps(2);
+    assert!(!h.state().tabs[0].filters[2].is_active());
+    settle(&mut h, 1000);
+}
+
+/// D-042: an existing row-number column replaces the viewer's `#`.
+#[test]
+fn existing_row_number_column_is_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("rn.csv");
+    let mut s = String::from("Index,Time,Msg\n");
+    for i in 0..500u32 {
+        s.push_str(&format!("{i},2024-03-11 10:00:{:02},m{i}\n", i % 60));
+    }
+    std::fs::write(&file, s).unwrap();
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    h.run_steps(2);
+    let t = &h.state().tabs[0];
+    assert_eq!(t.num_col(), Some(0));
+    assert!(!t.show_hash());
+    assert_eq!(t.grid.widths[1], 0.0);
+    // Go to row uses the file's numbers (0-based here), not the position.
+    assert_eq!(t.row_of_number(0), Some(0));
+    assert_eq!(t.row_of_number(499), Some(499));
+    assert_eq!(t.row_of_number(500), None);
+    assert_eq!(t.row_number(7), "7");
+
+    // Always show #: the viewer's own numbering, 1-based.
+    h.state_mut().tabs[0].rownum_mode = crate::settings::RowNumMode::Always;
+    h.run_steps(2);
+    let t = &h.state().tabs[0];
+    assert!(t.show_hash());
+    assert!(t.grid.widths[1] > 0.0);
+    assert_eq!(t.row_of_number(500), Some(499));
+    assert_eq!(t.row_number(7), "8");
+
+    // Never show #: no column; the file's numbers are still used.
+    h.state_mut().tabs[0].rownum_mode = crate::settings::RowNumMode::Never;
+    h.run_steps(2);
+    assert!(!h.state().tabs[0].show_hash());
+    assert_eq!(h.state().tabs[0].num_col(), Some(0));
+
+    // The mode is remembered per file.
+    h.state_mut().settings.row_num.insert(
+        file.to_string_lossy().into_owned(),
+        crate::settings::RowNumMode::Always,
+    );
+    h.state_mut().reopen_with(0, true, b',');
+    wait(&mut h, idle);
+    assert_eq!(
+        h.state().tabs[0].rownum_mode,
+        crate::settings::RowNumMode::Always
+    );
+
+    // A file without a counter keeps #.
+    let plain = sample(dir.path());
+    h.state_mut().open(&plain);
+    wait(&mut h, |a| a.tabs[1].ready() && !a.tabs[1].view.is_empty());
+    assert!(h.state().tabs[1].show_hash());
+    assert_eq!(h.state().tabs[1].num_col(), None);
 }

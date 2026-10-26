@@ -57,9 +57,29 @@ pub enum Op {
     Lt(String),
     Le(String),
     Between(String, String),
+    /// Complement of another operator (the rows it does not match, blank
+    /// and unparsable cells included). Only at the top of a predicate.
+    Not(Box<Op>),
 }
 
 impl Op {
+    /// The operator matching exactly the rows this one does not: its
+    /// natural opposite when it has one, else `Not` (and `Not(x)` is `x`).
+    pub fn negated(&self) -> Op {
+        match self {
+            Op::Equals(v) => Op::NotEquals(v.clone()),
+            Op::NotEquals(v) => Op::Equals(v.clone()),
+            Op::Contains(v) => Op::NotContains(v.clone()),
+            Op::NotContains(v) => Op::Contains(v.clone()),
+            Op::In(v) => Op::NotIn(v.clone()),
+            Op::NotIn(v) => Op::In(v.clone()),
+            Op::IsBlank => Op::IsNotBlank,
+            Op::IsNotBlank => Op::IsBlank,
+            Op::Not(x) => (**x).clone(),
+            other => Op::Not(Box::new(other.clone())),
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Op::Equals(_) => "equals",
@@ -78,6 +98,7 @@ impl Op {
             Op::Lt(_) => "<",
             Op::Le(_) => "<=",
             Op::Between(..) => "between",
+            Op::Not(_) => "not",
         }
     }
 }
@@ -155,6 +176,9 @@ fn find(hay: &[u8], needle: &[u8]) -> bool {
 
 impl Compiled {
     pub fn new(op: &Op, case_sensitive: bool, kind: Kind) -> Result<Compiled> {
+        if matches!(op, Op::Not(_)) {
+            return Err(Error::Other("internal: unresolved NOT operator".into()));
+        }
         let ci = !case_sensitive;
         let norm = |s: &str| {
             if ci {
@@ -346,6 +370,7 @@ impl Compiled {
             Op::NotIn(_) => !self.in_set(cell),
             Op::Regex(_) => re(cell),
             Op::Gt(_) | Op::Ge(_) | Op::Lt(_) | Op::Le(_) | Op::Between(..) => self.in_range(cell),
+            Op::Not(_) => false,
         }
     }
 
@@ -727,6 +752,15 @@ impl Engine {
         match expr {
             Expr::And(xs) | Expr::Or(xs) => xs.iter().try_for_each(|x| self.validate(x)),
             Expr::Not(x) => self.validate(x),
+            Expr::Pred(Pred {
+                op: Op::Not(x),
+                target,
+                case_sensitive,
+            }) => self.validate(&Expr::Pred(Pred {
+                target: target.clone(),
+                op: (**x).clone(),
+                case_sensitive: *case_sensitive,
+            })),
             Expr::Pred(p) => {
                 // With the column's kind: a time column checks its range
                 // operands (D-036) even when an AND term before it already
@@ -773,6 +807,14 @@ impl Engine {
 
     /// Bitmap of one predicate (cached).
     pub fn leaf(&self, p: &Pred) -> Result<Arc<RoaringBitmap>> {
+        if let Op::Not(x) = &p.op {
+            let inner = self.leaf(&Pred {
+                target: p.target.clone(),
+                op: (**x).clone(),
+                case_sensitive: p.case_sensitive,
+            })?;
+            return Ok(Arc::new(self.all_rows() - &*inner));
+        }
         let mut key = serde_json::to_string(p).unwrap_or_default();
         if let Target::Column(c) = p.target
             && let Some(k) = self.kind_override(c)

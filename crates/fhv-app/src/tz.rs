@@ -114,6 +114,7 @@ impl Display {
             Op::Lt(v) => Op::Lt(conv(v, false)),
             Op::Le(v) => Op::Le(conv(v, true)),
             Op::Between(a, b) => Op::Between(conv(a, false), conv(b, true)),
+            Op::Not(x) => Op::Not(Box::new(self.op_to_utc(x, order))),
             other => other.clone(),
         }
     }

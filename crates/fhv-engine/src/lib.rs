@@ -9,6 +9,7 @@ pub mod export;
 pub mod filter;
 pub mod index;
 pub mod progress;
+pub mod rownum;
 pub mod scan;
 pub mod sort;
 pub mod source;

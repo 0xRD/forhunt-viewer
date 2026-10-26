@@ -46,10 +46,21 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   - Match all / any.
   - Excel-style value list with counts and search. It, and the cell menu's
     "= / ≠ this value", select exact values (case and spaces count).
-  - Filter chips; clear all.
+  - Filter chips: click a chip to invert it (`Channel = Security` becomes
+    `Channel ≠ Security`; operators without an opposite are wrapped in
+    NOT), click it again to restore it, click its **×** to remove it.
+    *Clear filters* removes all. Inversions are saved in sessions.
 - **Global search** in every column, with match highlighting and next /
-  previous (F3). Tick *only matches* to hide the rows without the search
-  text.
+  previous (F3). *Only matches* (on by default; your last choice is
+  remembered) hides the rows without the search text; *Clear filters* also
+  empties the search.
+- **Row numbers.** If the file already has a row-number column
+  (`RecordNumber`, `#`, `No.`, `Index`, `Line`, `Ligne`... whose values are
+  a counter from 0 or 1 following the row position), the viewer's own `#`
+  column is hidden and that column is used by *Go to row* (Ctrl+G) and the
+  status bar; hover the status-bar row to see the file row. A column with
+  gaps or repeats (time-sorted `EventRecordId`) is not taken. View >
+  *Row numbers*: Auto / Always show # / Never show #, remembered per file.
 - **Sorting.** Multi-column (click, shift-click), deterministic (ties keep
   file order).
 - **Columns.** Show/hide, reorder, resize. *Freeze N cols* (toolbar, or
@@ -182,7 +193,7 @@ Command line: `forhunt-viewer [PATH...]` (CSV/TSV files, `.evtx`, `$MFT`,
 | Ctrl+W | close tab |
 | Ctrl+F | global search |
 | F3 / Shift+F3 | next / previous match |
-| Ctrl+G | go to row (`#` column) |
+| Ctrl+G | go to row (`#` column, or the file's own row-number column) |
 | Arrows, PgUp/PgDn, Ctrl+Home/End | move the selection |
 | Ctrl+C / Ctrl+Shift+C | copy cell / copy row as indented JSON (right-click a cell for tab-separated) |
 | click / Shift+click a header | sort / add a sort column |
