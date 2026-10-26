@@ -13,6 +13,7 @@ mod fonts;
 mod grid;
 #[cfg(target_os = "macos")]
 mod macos;
+mod querybar;
 mod session;
 mod settings;
 mod tab;

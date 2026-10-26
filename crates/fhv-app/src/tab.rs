@@ -187,6 +187,9 @@ pub struct Tab {
     /// (D-042).
     detected: Arc<OnceLock<Option<usize>>>,
     pub rownum_mode: RowNumMode,
+    /// Query bar text, and the part of the last applied query that the
+    /// column filters cannot hold (D-045).
+    pub query: crate::querybar::QueryState,
 }
 
 fn initial_width(name: &str) -> f32 {
@@ -285,6 +288,7 @@ impl Tab {
             nums_first: 0,
             detected,
             rownum_mode: RowNumMode::Auto,
+            query: Default::default(),
             clipboard: None,
             bad: None,
             hits_in_view: None,
@@ -379,37 +383,9 @@ impl Tab {
 
     /// The filter expression of the current UI state (None = all rows).
     pub fn expr(&self) -> Option<Expr> {
-        let mut all = Vec::new();
-        for (c, f) in self.filters.iter().enumerate() {
-            let time_order = match self.kind(c) {
-                Kind::Time(o) => Some(o),
-                _ => None,
-            };
-            let pred = |op: Op| {
-                Expr::Pred(Pred {
-                    target: Target::Column(c),
-                    op: match time_order {
-                        Some(o) => self.tz.op_to_utc(&op, o),
-                        None => op,
-                    },
-                    case_sensitive: f.case_sensitive,
-                })
-            };
-            if !f.quick.is_empty() {
-                let q = Op::Contains(f.quick.clone());
-                all.push(pred(if f.quick_not { q.negated() } else { q }));
-            }
-            if !f.conds.is_empty() {
-                let xs: Vec<Expr> = f.conds.iter().cloned().map(pred).collect();
-                all.push(if f.any { Expr::Or(xs) } else { Expr::And(xs) });
-            }
-            if let Some(op) = &f.values {
-                all.push(Expr::Pred(Pred {
-                    target: Target::Column(c),
-                    op: op.clone(),
-                    case_sensitive: true,
-                }));
-            }
+        let mut all = self.column_terms(true);
+        if let Some(q) = &self.query.residual {
+            all.push(crate::querybar::to_utc(self, q.clone()));
         }
         if self.search_filter && !self.search.is_empty() {
             all.push(Expr::Pred(Pred {
@@ -432,6 +408,44 @@ impl Tab {
         (!all.is_empty()).then_some(Expr::And(all))
     }
 
+    /// The column filters as ANDed terms, time operands rewritten to UTC
+    /// when `utc` (D-038), else as the analyst wrote them.
+    pub fn column_terms(&self, utc: bool) -> Vec<Expr> {
+        let mut all = Vec::new();
+        for (c, f) in self.filters.iter().enumerate() {
+            let time_order = match self.kind(c) {
+                Kind::Time(o) => Some(o),
+                _ => None,
+            };
+            let pred = |op: Op| {
+                Expr::Pred(Pred {
+                    target: Target::Column(c),
+                    op: match time_order {
+                        Some(o) if utc => self.tz.op_to_utc(&op, o),
+                        _ => op,
+                    },
+                    case_sensitive: f.case_sensitive,
+                })
+            };
+            if !f.quick.is_empty() {
+                let q = Op::Contains(f.quick.clone());
+                all.push(pred(if f.quick_not { q.negated() } else { q }));
+            }
+            if !f.conds.is_empty() {
+                let xs: Vec<Expr> = f.conds.iter().cloned().map(pred).collect();
+                all.push(if f.any { Expr::Or(xs) } else { Expr::And(xs) });
+            }
+            if let Some(op) = &f.values {
+                all.push(Expr::Pred(Pred {
+                    target: Target::Column(c),
+                    op: op.clone(),
+                    case_sensitive: true,
+                }));
+            }
+        }
+        all
+    }
+
     #[cfg(test)]
     pub fn view_query_for_test(&self) -> Option<&Query> {
         self.last_query.as_ref()
@@ -451,6 +465,7 @@ impl Tab {
 
     /// Re-runs the query (after any filter/sort/tag change).
     pub fn requery(&mut self) {
+        self.query.stale = true;
         self.pending = true;
         self.changed_at = Instant::now();
     }

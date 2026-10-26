@@ -32,6 +32,10 @@ pub struct Session {
     /// Day/month order set on date columns (absent in 0.2.x sessions).
     #[serde(default)]
     pub date_orders: Vec<(String, fhv_engine::time::Order)>,
+    /// Applied query terms the column filters cannot hold, as query text
+    /// with explicit cs (absent before 0.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -94,6 +98,7 @@ pub fn capture(tab: &Tab) -> Session {
                 _ => None,
             })
             .collect(),
+        query: (!tab.query.residual_text.is_empty()).then(|| tab.query.residual_text.clone()),
     }
 }
 
@@ -164,6 +169,17 @@ pub fn apply(tab: &mut Tab, s: &Session) -> Vec<String> {
             None => warn.push(format!("column {n} not in this file")),
         }
     }
+    let residual = match &s.query {
+        None => None,
+        Some(q) => match fhv_engine::query::parse(q, &tab.table.columns, false) {
+            Ok(e) => e,
+            Err(e) => {
+                warn.push(format!("query {q:?} not restored: {e}"));
+                None
+            }
+        },
+    };
+    crate::querybar::set_residual(tab, residual);
     tab.requery();
     warn
 }

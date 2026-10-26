@@ -15,6 +15,10 @@ pub struct Settings {
     /// Evidence path used in copied `forhunt show` commands.
     pub evidence: String,
     pub detail_pane: bool,
+    /// Recently applied queries, newest first.
+    pub query_history: Vec<String>,
+    /// Query conditions without `cs` / `ci` match case.
+    pub query_case_sensitive: bool,
     /// Last choice of the global search's "only matches" box (D-040).
     pub search_only_matches: bool,
     /// Row-number column mode per file path (D-042); absent = Auto.
@@ -42,6 +46,8 @@ impl Default for Settings {
             recent: Vec::new(),
             evidence: String::new(),
             detail_pane: true,
+            query_history: Vec::new(),
+            query_case_sensitive: false,
             search_only_matches: true,
             row_num: Default::default(),
         }

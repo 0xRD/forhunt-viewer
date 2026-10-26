@@ -50,6 +50,13 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
     `Channel ≠ Security`; operators without an opposite are wrapped in
     NOT), click it again to restore it, click its **×** to remove it.
     *Clear filters* removes all. Inversions are saved in sessions.
+- **Query bar** (Ctrl+L): type the whole filter as text, e.g.
+  `Channel = Security AND (EventID in (4624, 4625) OR Message contains failed)`,
+  then Enter. The chips show what it became, and editing chips rewrites
+  the text. Errors point at the character and say what was expected;
+  nothing is applied until the whole query is valid. Tab completes column
+  names and operators. Recent queries are under *History*. See
+  [Query language](#query-language).
 - **Global search** in every column, with match highlighting and next /
   previous (F3). *Only matches* (on by default; your last choice is
   remembered) hides the rows without the search text; *Clear filters* also
@@ -74,7 +81,8 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   shown. A malformed file never crashes the viewer.
 - **Export** of the current view or tagged rows to CSV or JSONL (visible
   columns, display order).
-- **Sessions.** Save and restore filters, columns, sort and tags as JSON.
+- **Sessions.** Save and restore filters (query included), columns, sort
+  and tags as JSON.
 - **Files.**
   - Tabs, drag and drop, recent files.
   - Encodings: UTF-8 (with or without BOM), UTF-16LE/BE, Windows-1252.
@@ -185,6 +193,64 @@ default application unless you choose it.
 Command line: `forhunt-viewer [PATH...]` (CSV/TSV files, `.evtx`, `$MFT`,
 `$J` or evidence folders).
 
+## Query language
+
+The query bar above the chips holds the column filters as text. Applying a
+query (Enter or *Apply*) replaces the column filters (the search box,
+*tagged only*, *bad rows* and the sort are not touched): each top-level
+`AND` term that one column's filter can hold (a condition, an `OR` of
+conditions on one column, an exact `in` list) becomes that column's chip;
+the rest (an `OR` across columns, `NOT` of a group...) becomes one
+`query:` chip. Clicking a chip inverts it and the text follows; **×**
+removes it. Esc in the bar goes back to the filters in force.
+
+```ebnf
+query     = [ or_expr ] ;
+or_expr   = and_expr { "OR" and_expr } ;
+and_expr  = unary { "AND" unary } ;
+unary     = "NOT" unary | primary ;
+primary   = "(" or_expr ")" | condition ;
+condition = column test [ "cs" | "ci" ] ;
+column    = name | "*" ;                      (* * = any column *)
+test      = ( "=" | "==" | "!=" | "<>" | ">" | ">=" | "<" | "<=" ) value
+          | ( "contains" | "startswith" | "endswith" | "regex" | "matches" ) value
+          | "between" value "and" value
+          | "in" "(" [ value { "," value } ] ")"
+          | "is" [ "not" ] "blank"
+          | "not" test ;           (* "not contains", "not in" are operators *)
+name      = value ;
+value     = bare | '"' { char | '""' } '"' | "'" { char | "''" } "'" ;
+bare      = char { char } ;  (* no space ( ) , = ! < > " ; not AND / OR / NOT *)
+```
+
+- Keywords are case-insensitive. Precedence: `NOT` > `AND` > `OR`.
+- Quote column names and values with spaces or symbols: `"Event ID" = 4624`,
+  `Path = "C:\Program Files\x.exe"`. Inside quotes, a quote is doubled
+  (`"say ""hi"""`); backslashes are plain characters (paths and regexes
+  need no escaping).
+- Column names match exactly, else ignoring case. An unknown column is an
+  error that lists the closest names.
+- Case: the **Aa** toggle sets whether conditions match case; `cs` / `ci`
+  after a condition overrides it for that condition. Regexes also accept
+  `(?i)`.
+- `col not startswith x` inverts one condition (like clicking its chip);
+  `NOT (...)` inverts a group. Both give the same rows.
+- Dates: `>`, `>=`, `<`, `<=` and `between` follow the display time zone
+  rules above (a date without an offset means the display zone; `<=` and
+  the end of `between` include the whole day / minute / second written).
+- At most 128 levels of `NOT` and parentheses, and 64 KiB of text.
+
+Examples:
+
+```text
+Channel = Security AND (EventID in (4624, 4625) OR Message contains "failed") AND NOT User startswith SYSTEM
+TimeCreated between "2024-03-11 09:00" and "2024-03-11 18:00" AND EventID = 4688
+CommandLine regex '-enc\s+[A-Za-z0-9+/=]{40,}' OR CommandLine contains mimikatz
+User in (Administrator, admin) cs AND LogonType not in (3, 5)
+* contains 10.0.0.5
+TargetUserName is not blank AND NOT (IpAddress = "-" OR IpAddress = "::1")
+```
+
 ## Keyboard shortcuts
 
 | Keys | Action |
@@ -192,6 +258,7 @@ Command line: `forhunt-viewer [PATH...]` (CSV/TSV files, `.evtx`, `$MFT`,
 | Ctrl+O | open files |
 | Ctrl+W | close tab |
 | Ctrl+F | global search |
+| Ctrl+L | query bar (Enter applies, Tab completes, Esc reverts) |
 | F3 / Shift+F3 | next / previous match |
 | Ctrl+G | go to row (`#` column, or the file's own row-number column) |
 | Arrows, PgUp/PgDn, Ctrl+Home/End | move the selection |

@@ -344,6 +344,10 @@ impl App {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
         let cmd_shift = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
+        let query = ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::L)));
+        if query && let Some(t) = self.tab() {
+            t.query.focus = true;
+        }
         let (open, close, find, goto, copy_row, copy, f3, sf3, esc) = ctx.input_mut(|i| {
             (
                 i.consume_shortcut(&cmd(Key::O)),
@@ -615,6 +619,11 @@ impl App {
         });
     }
 
+    #[cfg(test)]
+    pub fn settings_for_test(&self) -> &Settings {
+        &self.settings
+    }
+
     fn tab_ref(&self) -> Option<&Tab> {
         self.tabs.get(self.active)
     }
@@ -738,6 +747,7 @@ impl App {
             }
             ui.separator();
             let any = t.filters.iter().any(ColFilter::is_active)
+                || t.query.residual.is_some()
                 || t.tagged_only
                 || t.bad_only
                 || (t.search_filter && !t.search.is_empty());
@@ -748,6 +758,7 @@ impl App {
                 for f in &mut t.filters {
                     *f = ColFilter::default();
                 }
+                crate::querybar::set_residual(t, None);
                 t.tagged_only = false;
                 t.bad_only = false;
                 // The search text is a filter too; the "only matches" box
@@ -776,10 +787,15 @@ impl App {
             )
             .on_hover_text(tip);
         });
+        crate::querybar::ui(ui, t, &mut self.settings);
         // Filter chips. Clicking one inverts it (NOT), its x removes it.
         let mut remove: Option<(usize, Option<usize>)> = None;
         let mut invert: Option<(usize, Option<usize>)> = None;
-        let has_chips = t.filters.iter().any(ColFilter::is_active) || !t.sort.is_empty();
+        let mut remove_query = false;
+        let mut invert_query = false;
+        let has_chips = t.filters.iter().any(ColFilter::is_active)
+            || t.query.residual.is_some()
+            || !t.sort.is_empty();
         // Always one line (even empty) so the grid does not jump when the
         // first filter or sort appears.
         ui.horizontal_wrapped(|ui| {
@@ -871,6 +887,21 @@ impl App {
                         }
                     }
                 }
+                if let Some(r) = &t.query.residual {
+                    let negated = matches!(r, fhv_engine::Expr::Not(_));
+                    match chip(
+                        ui,
+                        format!("query: {}", t.query.residual_text),
+                        "",
+                        negated,
+                        "terms of the applied query that no single column's filter can \
+                         hold (edit them in the query bar). Click: invert (NOT), x: remove",
+                    ) {
+                        Chip::Invert => invert_query = true,
+                        Chip::Remove => remove_query = true,
+                        Chip::None => {}
+                    }
+                }
                 if !t.sort.is_empty() {
                     let s: Vec<String> = t
                         .sort
@@ -887,6 +918,19 @@ impl App {
                 }
             }
         });
+        if remove_query || invert_query {
+            let r = t
+                .query
+                .residual
+                .take()
+                .filter(|_| !remove_query)
+                .map(|r| match r {
+                    fhv_engine::Expr::Not(x) => *x,
+                    x => fhv_engine::Expr::Not(Box::new(x)),
+                });
+            crate::querybar::set_residual(t, r);
+            t.requery();
+        }
         if let Some((c, i)) = invert {
             t.filters[c].invert(i);
             t.requery();

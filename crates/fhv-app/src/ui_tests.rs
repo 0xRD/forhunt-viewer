@@ -1071,3 +1071,201 @@ fn existing_row_number_column_is_used() {
     assert!(h.state().tabs[1].show_hash());
     assert_eq!(h.state().tabs[1].num_col(), None);
 }
+
+fn type_query(h: &mut Harness<'static, App>, q: &str) {
+    h.get_by_label("Query").focus();
+    h.step();
+    h.get_by_label("Query").type_text(q);
+    h.step();
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+}
+
+/// Issue #1: a query typed in the bar gives the chips and the rows of the
+/// equivalent condition-editor filters; editing chips rewrites the text.
+#[test]
+fn query_bar_equals_condition_editor_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    type_query(
+        &mut h,
+        "EventId in (4624, 4688) AND (User = jdoe OR User = system) AND Message contains \"msg 1\"",
+    );
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() < 1000);
+    let got: Vec<u32> = h.state().tabs[0].view.iter().collect();
+    let tree = h.state().tabs[0].expr();
+    // The same filters built as the condition editor does.
+    let t = &mut h.state_mut().tabs[0];
+    assert!(t.query.residual.is_none());
+    let mut want = vec![crate::tab::ColFilter::default(); 4];
+    want[1].conds = vec![Op::In(vec!["4624".into(), "4688".into()])];
+    want[2].conds = vec![Op::Equals("jdoe".into()), Op::Equals("system".into())];
+    want[2].any = true;
+    want[3].conds = vec![Op::Contains("msg 1".into())];
+    assert_eq!(t.filters, want);
+    let oracle: Vec<u32> = (0..1000u32)
+        .filter(|&i| {
+            let ev = [4624, 4625, 4688][(i % 3) as usize];
+            let user = ["jdoe", "asmith", "SYSTEM", "bwilson"][(i % 4) as usize];
+            ev != 4625
+                && (user == "jdoe" || user == "SYSTEM")
+                && format!("msg {i}").contains("msg 1")
+        })
+        .collect();
+    assert_eq!(got, oracle);
+    t.filters = want;
+    assert_eq!(t.expr(), tree);
+    h.get_by_label_contains("User equals \"jdoe\"");
+    h.get_by_label_contains("or User equals \"system\"");
+    // The text is the normalized query; removing a chip rewrites it.
+    assert_eq!(
+        h.state().tabs[0].query.text,
+        "EventId in (4624, 4688) AND (User = jdoe OR User = system) AND Message contains \"msg 1\""
+    );
+    // Clicking a chip inverts it (#3), in the text too; its x removes it.
+    h.get_by_label_contains("Message contains \"msg 1\"")
+        .click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().tabs[0].query.text,
+        "EventId in (4624, 4688) AND (User = jdoe OR User = system) AND Message not contains \"msg 1\""
+    );
+    let x = h
+        .get_all_by_label("×")
+        .last()
+        .expect("x of the Message chip");
+    x.click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().tabs[0].query.text,
+        "EventId in (4624, 4688) AND (User = jdoe OR User = system)"
+    );
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 334);
+    // History keeps the applied query.
+    assert!(h.state().settings_for_test().query_history[0].starts_with("EventId in (4624, 4688)"));
+}
+
+/// Parse errors show where and what was expected, and change nothing;
+/// unknown columns list close matches.
+#[test]
+fn query_bar_errors_never_apply() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    type_query(&mut h, "User = jdoe AND");
+    h.get_by_label_contains(
+        "at character 16: expected a column name, NOT or (, found the end of the query. \
+         The filters are unchanged.",
+    );
+    h.get_by_label_contains("               ^");
+    assert!(h.state().tabs[0].filters.iter().all(|f| !f.is_active()));
+    assert_eq!(h.state().tabs[0].view.len(), 1000);
+    let t = &mut h.state_mut().tabs[0];
+    t.query.text.clear();
+    type_query(&mut h, "Usr = jdoe");
+    h.get_by_label_contains("unknown column \"Usr\"; did you mean User");
+    let t = &mut h.state_mut().tabs[0];
+    t.query.text.clear();
+    // Parsed but invalid (a time column needs dates): not applied either.
+    type_query(&mut h, "Time >= 2025 OR User = jdoe");
+    h.get_by_label_contains("is not a date-time for this time column");
+    assert!(h.state().tabs[0].query.residual.is_none());
+    // Escape goes back to the filters in force.
+    h.get_by_label("Query").focus();
+    h.step();
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[0].query.text, "");
+}
+
+/// Terms no column filter can hold stay one "query" chip, evaluated with
+/// the display zone, saved in sessions.
+#[test]
+fn query_bar_residual_chip_zone_and_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let cache = dir.path().join("cache");
+    let settings = Settings {
+        tz: "Europe/Paris".into(),
+        ..Settings::default()
+    };
+    let f = file.clone();
+    let mut h = Harness::builder()
+        .with_size([1400.0, 800.0])
+        .build_eframe(move |cc| App::with(cc, vec![f.clone()], settings.clone(), cache.clone()));
+    wait(&mut h, idle);
+    // Paris is UTC+1 in March 2024: 11:05 Paris = 10:05 UTC.
+    type_query(
+        &mut h,
+        "User = SYSTEM cs AND (Time < \"2024-03-11 11:05\" OR EventId = 4688)",
+    );
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() < 1000);
+    let oracle: Vec<u32> = (0..1000u32)
+        .filter(|&i| i % 4 == 2 && (i / 60 % 60 < 5 || i % 3 == 2))
+        .collect();
+    assert_eq!(h.state().tabs[0].view.iter().collect::<Vec<_>>(), oracle);
+    let t = &h.state().tabs[0];
+    assert_eq!(t.filters[2].conds, vec![Op::Equals("SYSTEM".into())]);
+    assert!(t.filters[2].case_sensitive);
+    assert_eq!(
+        t.query.residual_text,
+        "Time < \"2024-03-11 11:05\" OR EventId = 4688"
+    );
+    h.get_by_label_contains("query: Time < \"2024-03-11 11:05\" OR EventId = 4688");
+    // Session round trip.
+    let s = crate::session::capture(&h.state().tabs[0]);
+    let json = serde_json::to_string(&s).unwrap();
+    let s2: crate::session::Session = serde_json::from_str(&json).unwrap();
+    h.get_by_label("Clear filters").click();
+    h.run_steps(2);
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 1000);
+    assert!(h.state().tabs[0].query.residual.is_none());
+    assert_eq!(h.state().tabs[0].query.text, "");
+    let warn = crate::session::apply(&mut h.state_mut().tabs[0], &s2);
+    assert!(warn.is_empty(), "{warn:?}");
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() < 1000);
+    assert_eq!(h.state().tabs[0].view.iter().collect::<Vec<_>>(), oracle);
+    // Clicking the query chip inverts it; its x removes the residual only.
+    h.get_by_label_contains("query: ").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().tabs[0].query.text,
+        "User = SYSTEM cs AND NOT (Time < \"2024-03-11 11:05\" OR EventId = 4688)"
+    );
+    wait(&mut h, |a| {
+        idle(a) && a.tabs[0].view.len() == 250 - oracle.len() as u64
+    });
+    h.get_all_by_label("×").last().unwrap().click();
+    h.run_steps(2);
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 250);
+    assert_eq!(h.state().tabs[0].query.text, "User = SYSTEM cs");
+}
+
+/// Autocomplete: Tab completes the column / operator being typed.
+#[test]
+fn query_bar_completes_with_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    h.get_by_label("Query").focus();
+    h.step();
+    h.get_by_label("Query").type_text("Ev");
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[0].query.text, "EventId ");
+    h.get_by_label("Query").type_text("not i");
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[0].query.text, "EventId not in (");
+    h.get_by_label("Query").type_text("4625)");
+    h.step();
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 667);
+}
