@@ -23,6 +23,10 @@ forhunt-core.workspace = true
 forhunt-output.workspace = true
 eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland", "clipboard", "accesskit", "system_fonts"] }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
+# Installed fonts for the grid (D-057): both already in the tree through
+# eframe's system font fallback.
+fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"] }
+skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-bundle-platform", "tzdb-zoneinfo"] }
 
 [dev-dependencies]

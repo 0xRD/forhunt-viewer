@@ -1,0 +1,82 @@
+{
+  "name": "Dracula",
+  "dark": true,
+  "high_contrast": false,
+  "credit": "Dracula Theme, MIT licence, https://draculatheme.com",
+  "bg": "#282a36",
+  "bg_window": "#21222c",
+  "bg_input": "#191a21",
+  "bg_stripe": "#2e3040",
+  "bg_header": "#343746",
+  "text": "#f8f8f2",
+  "text_strong": "#ffffff",
+  "text_weak": "#b4b9d4",
+  "accent": "#bd93f9",
+  "widget": "#44475a",
+  "hover": "#4e5168",
+  "active": "#5b5f7d",
+  "border": "#44475a",
+  "grid_line": "#363949",
+  "selection": "#44475a",
+  "search_hit": "#5a5230",
+  "tagged": "#4a4430",
+  "chip": {
+    "bg": "#3b3f55",
+    "fg": "#f8f8f2"
+  },
+  "chip_negated": {
+    "bg": "#4d2229",
+    "fg": "#ffb3b3"
+  },
+  "error": "#ff6e6e",
+  "warning": "#ffb86c",
+  "active_cell": "#f1fa8c",
+  "range_fill": "#bd93f940",
+  "range_outline": "#bd93f9",
+  "duplicate": {
+    "bg": "#4d3a26",
+    "fg": "#ffb86c"
+  },
+  "unique": {
+    "bg": "#26402f",
+    "fg": "#50fa7b"
+  },
+  "detail_highlight": {
+    "bg": "#45472a",
+    "fg": "#f1fa8c"
+  },
+  "rules": {
+    "red": {
+      "bg": "#4d2229",
+      "fg": "#ff9e9e"
+    },
+    "orange": {
+      "bg": "#4d3622",
+      "fg": "#ffb86c"
+    },
+    "yellow": {
+      "bg": "#45472a",
+      "fg": "#f1fa8c"
+    },
+    "green": {
+      "bg": "#22402c",
+      "fg": "#50fa7b"
+    },
+    "teal": {
+      "bg": "#1f4249",
+      "fg": "#8be9fd"
+    },
+    "blue": {
+      "bg": "#2a3557",
+      "fg": "#a8c4ff"
+    },
+    "purple": {
+      "bg": "#3d2d57",
+      "fg": "#d6b8ff"
+    },
+    "gray": {
+      "bg": "#3a3c4e",
+      "fg": "#e6e6f0"
+    }
+  }
+}

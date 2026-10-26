@@ -1,4 +1,4 @@
-//! User settings (theme, display time zone, recent files, forhunt evidence
+//! User settings (theme, fonts, display time zone, recent files, forhunt evidence
 //! path), stored as JSON in the OS config directory.
 
 use std::path::PathBuf;
@@ -23,7 +23,33 @@ pub struct Settings {
     pub search_only_matches: bool,
     /// Row-number column mode per file path (D-042); absent = Auto.
     pub row_num: std::collections::BTreeMap<String, RowNumMode>,
+    /// Theme name or "System" (D-056); None: from `dark` (older settings).
+    pub theme: Option<String>,
+    /// Grid font, its size in points, monospace-only font list (D-057).
+    pub grid_font: GridFont,
+    pub grid_font_size: f32,
+    pub mono_only: bool,
+    /// Scale of the whole UI (egui zoom factor).
+    pub ui_scale: f32,
 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum GridFont {
+    Bundled(String),
+    /// An installed family.
+    System(String),
+    File(PathBuf),
+}
+
+impl Default for GridFont {
+    fn default() -> Self {
+        GridFont::Bundled("JetBrains Mono".into())
+    }
+}
+
+pub const FONT_SIZE: f32 = 12.5;
+pub const FONT_MIN: f32 = 8.0;
+pub const FONT_MAX: f32 = 32.0;
 
 /// What to do with the viewer's own `#` column when the file has a
 /// row-number column of its own.
@@ -50,6 +76,11 @@ impl Default for Settings {
             query_case_sensitive: false,
             search_only_matches: true,
             row_num: Default::default(),
+            theme: None,
+            grid_font: GridFont::default(),
+            grid_font_size: FONT_SIZE,
+            mono_only: true,
+            ui_scale: 1.0,
         }
     }
 }
@@ -105,10 +136,19 @@ impl Settings {
     }
 
     pub fn load() -> Settings {
-        std::fs::read(Self::path())
+        let mut s: Settings = std::fs::read(Self::path())
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        s.grid_font_size = clamp_size(s.grid_font_size);
+        s.ui_scale = clamp_scale(s.ui_scale);
+        s
+    }
+
+    pub fn theme_name(&self) -> String {
+        self.theme
+            .clone()
+            .unwrap_or_else(|| if self.dark { "Dark" } else { "Light" }.into())
     }
 
     pub fn save(&self) {
@@ -128,6 +168,22 @@ impl Settings {
         self.recent.retain(|r| r != &p);
         self.recent.insert(0, p);
         self.recent.truncate(12);
+    }
+}
+
+pub fn clamp_size(v: f32) -> f32 {
+    if v.is_finite() {
+        v.clamp(FONT_MIN, FONT_MAX)
+    } else {
+        FONT_SIZE
+    }
+}
+
+pub fn clamp_scale(v: f32) -> f32 {
+    if v.is_finite() {
+        v.clamp(0.5, 3.0)
+    } else {
+        1.0
     }
 }
 

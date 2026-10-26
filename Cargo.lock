@@ -1469,6 +1469,7 @@ dependencies = [
  "egui_kittest",
  "embed-resource",
  "fhv-engine",
+ "fontique",
  "forhunt-core",
  "forhunt-output",
  "jiff",
@@ -1479,6 +1480,7 @@ dependencies = [
  "roaring",
  "serde",
  "serde_json",
+ "skrifa",
  "tempfile",
 ]
 

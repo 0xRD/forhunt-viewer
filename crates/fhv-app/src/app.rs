@@ -1,7 +1,7 @@
 //! The application window: menus, tabs, toolbar, grid, detail pane, status
 //! bar and dialogs.
 
-use eframe::egui::{self, Color32, Key, KeyboardShortcut, Modifiers, RichText, Ui};
+use eframe::egui::{self, Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use fhv_engine::export::Format;
 use fhv_engine::filter::{Op, value_counts};
 use fhv_engine::sort::SortKey;
@@ -136,6 +136,11 @@ pub struct App {
     detail: Option<(PathBuf, u32, Vec<String>, Vec<String>)>,
     /// Hidden scroll benchmark (env FHV_BENCH_SCROLL=frames): frame times.
     bench: Option<(usize, Vec<f64>, Vec<f64>)>,
+    /// Hidden frame counter (env FHV_FPS): frames per second on stderr.
+    fps: Option<(std::time::Instant, u32)>,
+    pub(crate) appearance: crate::appearance::State,
+    /// Window title last sent (a viewport command repaints: D-055).
+    title: String,
 }
 
 impl App {
@@ -150,12 +155,9 @@ impl App {
         settings: Settings,
         cache_dir: PathBuf,
     ) -> App {
-        crate::fonts::install(&cc.egui_ctx);
-        cc.egui_ctx.set_visuals(if settings.dark {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
-        });
+        crate::fonts::install(&cc.egui_ctx, &Default::default(), None);
+        // Ctrl+= / Ctrl+- / Ctrl+0 size the grid font (appearance.rs).
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let mut app = App {
             tabs: Vec::new(),
             active: 0,
@@ -178,6 +180,9 @@ impl App {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .map(|n| (n, Vec::new(), Vec::new())),
+            fps: std::env::var_os("FHV_FPS").map(|_| (std::time::Instant::now(), 0)),
+            appearance: crate::appearance::State::new(&dirs().config),
+            title: String::new(),
             style: Style {
                 filter_h: 24.0,
                 ..Style::default()
@@ -307,7 +312,7 @@ impl App {
                         );
                     }
                     None => {
-                        ui.spinner();
+                        crate::appearance::spinner(ui);
                         ui.label(format!("{text}: opening…"));
                     }
                 }
@@ -512,13 +517,12 @@ impl App {
                 }
             });
             ui.menu_button("View", |ui| {
-                if ui.checkbox(&mut self.settings.dark, "Dark theme").changed() {
-                    ui.ctx().set_visuals(if self.settings.dark {
-                        egui::Visuals::dark()
-                    } else {
-                        egui::Visuals::light()
-                    });
-                    self.settings.save();
+                ui.menu_button("Theme", |ui| {
+                    self.appearance.theme_picker(ui, &mut self.settings)
+                });
+                if ui.button("Settings…").on_hover_text("theme, grid font and size, UI scale").clicked() {
+                    ui.close();
+                    self.appearance.settings_open = true;
                 }
                 if ui
                     .checkbox(&mut self.settings.detail_pane, "Detail pane")
@@ -690,11 +694,14 @@ impl App {
                         .any(|c| matches!(c.kind, fhv_engine::columns::Kind::Time(_)))
                 });
                 if has_time && !t.tz_display().is_utc() {
-                    ui.label(RichText::new("time columns: UTC file values").color(WARN))
-                        .on_hover_text(format!(
-                            "The search matches the values in the file (UTC), not the {} times shown",
-                            t.tz_display().name
-                        ));
+                    ui.label(
+                        RichText::new("time columns: UTC file values")
+                            .color(ui.visuals().warn_fg_color),
+                    )
+                    .on_hover_text(format!(
+                        "The search matches the values in the file (UTC), not the {} times shown",
+                        t.tz_display().name
+                    ));
                 }
             }
             if ui
@@ -738,7 +745,7 @@ impl App {
                     .toggle_value(
                         &mut t.bad_only,
                         RichText::new(format!("⚠ bad rows ({nbad})"))
-                            .color(Color32::from_rgb(230, 120, 60)),
+                            .color(ui.visuals().warn_fg_color),
                     )
                     .on_hover_text("rows with a wrong number of fields or a broken quote")
                     .changed()
@@ -982,7 +989,7 @@ impl App {
                 if frac >= 0.0 {
                     ui.add(egui::ProgressBar::new(frac).desired_width(140.0).text(what));
                 } else {
-                    ui.spinner();
+                    crate::appearance::spinner(ui);
                     ui.label(what);
                 }
                 if (t.job.is_some() || t.loading()) && ui.small_button("cancel (Esc)").clicked() {
@@ -991,19 +998,22 @@ impl App {
                 ui.separator();
             }
             if let Some(e) = &t.load_error {
-                ui.colored_label(Color32::RED, format!("error: {e}"));
+                ui.colored_label(ui.visuals().error_fg_color, format!("error: {e}"));
             }
             if let Some(s) = &t.status {
                 ui.label(s);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if t.table.header_guessed {
-                    ui.label(RichText::new("first row taken as header (a guess)").color(WARN))
-                        .on_hover_text(
-                            "No cell looks like a number or a date, so the first row was \
+                    ui.label(
+                        RichText::new("first row taken as header (a guess)")
+                            .color(ui.visuals().warn_fg_color),
+                    )
+                    .on_hover_text(
+                        "No cell looks like a number or a date, so the first row was \
                              taken as column names. If it is data, File > Reopen with \
                              options… and untick \"First row is a header\".",
-                        );
+                    );
                 }
                 let d = &t.table.dialect;
                 let delim = match d.delim {
@@ -1054,7 +1064,7 @@ impl App {
                     self.detail = Some((t.path.clone(), row, f, shown));
                 }
                 Err(e) => {
-                    ui.colored_label(Color32::RED, e.to_string());
+                    ui.colored_label(ui.visuals().error_fg_color, e.to_string());
                     return;
                 }
             }
@@ -1134,7 +1144,7 @@ impl App {
     }
 
     fn grid(&mut self, ui: &mut Ui) {
-        let dark = self.settings.dark;
+        let tagged = crate::theme::current(ui.ctx()).tagged.0;
         let evidence = self.settings.evidence.clone();
         let Some(t) = self.tabs.get_mut(self.active) else {
             // Empty window: what can be opened, and how files combine.
@@ -1178,7 +1188,7 @@ impl App {
         };
         if let Some(e) = &t.load_error {
             ui.colored_label(
-                Color32::RED,
+                ui.visuals().error_fg_color,
                 format!("Cannot open {}: {e}", t.path.display()),
             );
             return;
@@ -1360,7 +1370,7 @@ impl App {
             let tz = &self.tz;
             // The grid state lives in the tab, which the source borrows.
             let mut gs = std::mem::take(&mut t.grid);
-            let mut src = t.source(tz, dark);
+            let mut src = t.source(tz, tagged);
             let r = grid::show(
                 ui,
                 egui::Id::unique(("grid", self.active)),
@@ -1962,6 +1972,9 @@ impl App {
                             ("Shift+click header", "add a sort column"),
                             ("Right click", "header and cell menus"),
                             ("Esc", "cancel the running operation"),
+                            ("Ctrl+= / Ctrl+-", "larger / smaller grid font"),
+                            ("Ctrl+0", "default grid font size"),
+                            ("Ctrl+wheel", "grid font size"),
                         ] {
                             ui.label(RichText::new(k).monospace());
                             ui.label(v);
@@ -2115,9 +2128,6 @@ pub fn forhunt_show_command_for_test(
     forhunt_show_command(t, r, evidence)
 }
 
-/// Warning colour for notes the analyst must not miss.
-const WARN: Color32 = Color32::from_rgb(230, 120, 60);
-
 /// Column `c` is a time column shown in a zone other than UTC: text
 /// matching on it sees the file's UTC values (D-038).
 fn utc_text_note(t: &Tab, c: usize) -> bool {
@@ -2180,14 +2190,10 @@ enum Chip {
 /// A filter chip: the label inverts it when clicked, the x removes it. An
 /// inverted chip has its own tint.
 fn chip(ui: &mut Ui, text: String, note: &str, negated: bool, tip: &str) -> Chip {
-    let mut rt = chip_text(text, note);
-    let b = |label: RichText| {
-        let mut b = egui::Button::new(label);
-        if negated {
-            b = b.fill(Color32::from_rgba_unmultiplied(200, 70, 70, 60));
-        }
-        b
-    };
+    let th = crate::theme::current(ui.ctx());
+    let colors = if negated { th.chip_negated } else { th.chip };
+    let mut rt = chip_text(text, note, th.warning.0);
+    let b = |label: RichText| egui::Button::new(label.color(colors.fg.0)).fill(colors.bg.0);
     if negated {
         rt = rt.italics();
     }
@@ -2205,11 +2211,11 @@ fn chip(ui: &mut Ui, text: String, note: &str, negated: bool, tip: &str) -> Chip
 }
 
 /// Chip label, in the warning colour when it carries a note.
-fn chip_text(text: String, note: &str) -> RichText {
+fn chip_text(text: String, note: &str, warn: egui::Color32) -> RichText {
     if note.is_empty() {
         RichText::new(text)
     } else {
-        RichText::new(text).color(WARN)
+        RichText::new(text).color(warn)
     }
 }
 
@@ -2437,6 +2443,13 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         let t_frame = std::time::Instant::now();
         self.bench_step(&ctx, frame);
+        if let Some((t0, n)) = &mut self.fps {
+            *n += 1;
+            if t0.elapsed().as_secs_f64() >= 1.0 {
+                eprintln!("fps {:.1}", *n as f64 / t0.elapsed().as_secs_f64());
+                (*t0, *n) = (std::time::Instant::now(), 0);
+            }
+        }
         // Files dropped on the window.
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -2464,15 +2477,21 @@ impl eframe::App for App {
             }
         }
         if running {
-            // Progress refresh only: background work does not need 60 fps.
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            // Progress refresh only, throttled (D-055).
+            ctx.request_repaint_after(crate::appearance::busy_repaint(&ctx));
         }
+        self.appearance
+            .frame(&ctx, &mut self.settings, &mut self.style);
+        self.appearance.shortcuts(&ctx, &mut self.settings);
         self.shortcuts(&ctx);
         let title = match self.tab_ref() {
             Some(t) => format!("{} — forhunt-viewer", t.shown_path()),
             None => "forhunt-viewer".into(),
         };
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        if title != self.title {
+            self.title = title.clone();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         if !self.tabs.is_empty() {
@@ -2492,6 +2511,7 @@ impl eframe::App for App {
         self.columns_window(&ctx);
         self.export_window(&ctx);
         self.small_dialogs(&ctx);
+        self.appearance.settings_window(&ctx, &mut self.settings);
         if let Some((_, ui_ms, _)) = &mut self.bench
             && self
                 .tabs
@@ -2569,4 +2589,11 @@ pub fn valid_forhunt_id_for_test(v: &str) -> bool {
 #[cfg(test)]
 pub fn shell_quote_for_test(v: &str) -> String {
     shell_quote(v)
+}
+
+#[cfg(test)]
+impl App {
+    pub fn style_row_h(&self) -> f32 {
+        self.style.row_h
+    }
 }

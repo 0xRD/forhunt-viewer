@@ -5,7 +5,7 @@
 //! rest (cross-column OR, NOT of a group...) is kept as one residual tree,
 //! shown as a "query" chip. Editing chips regenerates the text.
 
-use eframe::egui::{self, Color32, Key, RichText, Ui};
+use eframe::egui::{self, Key, RichText, Ui};
 use fhv_engine::columns::Kind;
 use fhv_engine::filter::{Expr, Op, Pred, Target};
 use fhv_engine::query::{self, ParseError};
@@ -13,7 +13,6 @@ use fhv_engine::query::{self, ParseError};
 use crate::settings::Settings;
 use crate::tab::{ColFilter, Tab};
 
-const ERR: Color32 = Color32::from_rgb(230, 90, 80);
 const HISTORY_MAX: usize = 30;
 
 #[derive(Default)]
@@ -333,12 +332,12 @@ pub fn ui(ui: &mut Ui, t: &mut Tab, settings: &mut Settings) {
                 ui.label(
                     RichText::new(format!("Query {}\n{caret}", t.query.text))
                         .monospace()
-                        .color(ERR),
+                        .color(ui.visuals().error_fg_color),
                 );
             }
             QueryError::Invalid(_) => {}
         }
-        ui.label(RichText::new(msg).color(ERR));
+        ui.label(RichText::new(msg).color(ui.visuals().error_fg_color));
     }
     if had_focus && !t.query.suggest.1.is_empty() {
         let mut pick = None;

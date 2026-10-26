@@ -48,6 +48,8 @@ pub struct GridState {
     pub frozen: usize,
     /// Rows that fit in the viewport at the last frame.
     pub page_rows: u64,
+    /// Rows area at the last frame (tests).
+    pub body: Rect,
     drag_thumb: Option<(f32, f64)>,
 }
 
@@ -61,6 +63,7 @@ impl Default for GridState {
             selected_col: 0,
             frozen: 0,
             page_rows: 1,
+            body: Rect::NOTHING,
             drag_thumb: None,
         }
     }
@@ -219,6 +222,7 @@ pub fn show(
     );
     let page = ((body.height() / st.row_h).floor() as u64).max(1);
     state.page_rows = page;
+    state.body = body;
     let max_top = n.saturating_sub(page) as f64;
 
     // The grid uses the arrow keys itself: while it has focus, egui must
@@ -425,8 +429,9 @@ pub fn show(
     let text_color = visuals.text_color();
     let stripe = visuals.faint_bg_color;
     let sel_fill = visuals.selection.bg_fill;
-    let hl_fill = Color32::from_rgba_unmultiplied(255, 200, 0, 90);
-    let grid_line = Stroke::new(1.0, sep.color.gamma_multiply(0.5));
+    let th = crate::theme::current(ui.ctx());
+    let hl_fill = th.search_hit.0;
+    let grid_line = Stroke::new(1.0, th.grid_line.0);
     let needle = highlight;
     for k in 0..count {
         let row = first + k;
@@ -449,7 +454,7 @@ pub fn show(
                 body_p.rect_stroke(
                     clip_for(c, cell),
                     0.0,
-                    Stroke::new(1.5, visuals.strong_text_color()),
+                    Stroke::new(1.5, th.active_cell.0),
                     StrokeKind::Inside,
                 );
             }
@@ -497,7 +502,7 @@ pub fn show(
     if state.frozen > 0 {
         body_p.line_segment(
             [pos2(frozen_end, full.min.y), pos2(frozen_end, body.max.y)],
-            Stroke::new(2.0, visuals.widgets.active.bg_fill),
+            Stroke::new(2.0, th.accent.0),
         );
     }
 

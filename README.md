@@ -99,7 +99,23 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   written. Text matching on time columns (filter row, contains, global
   search) matches the file's values (UTC for forensic tools): the filter
   chip and the search box say so in orange when the zone is not UTC.
-- **Dark and light themes**, keyboard-friendly.
+- **Themes.** View > Theme: Dark, Dark soft, Dark high contrast, Light,
+  Light high contrast, Dracula, Solarized dark / light, Nord, Gruvbox dark,
+  or System (follows the OS light / dark setting). Hovering an entry previews
+  it. Every theme passes WCAG AA contrast for text, the high-contrast ones
+  AAA (checked by a test). A theme is one JSON file
+  (`crates/fhv-app/assets/themes/`); your own go in `<config>/themes/*.json`
+  (config = `~/Library/Application Support/forhunt-viewer` on macOS,
+  `%APPDATA%\forhunt-viewer` on Windows, `~/.config/forhunt-viewer` on Linux).
+- **Settings** (View > Settings…): theme, grid font (bundled JetBrains Mono
+  or Inter, any installed font, monospaced only by default, or a font file),
+  grid font size 8-32 pt (rows follow), and a separate UI scale for menus,
+  panels and dialogs. Changes apply at once, to all tabs, and are saved;
+  *Reset to default* restores them. A font file that cannot be read is
+  refused and the grid keeps its font.
+- **Idle means idle**: no repaint without input or running work (0 % CPU),
+  10 repaints per second for progress while a job runs (1 per second in the
+  background).
 - **forhunt integration.** When a `ForhuntId` column is present:
   - copy `forhunt show <id> -p <evidence>` from a row's context menu;
   - export the tagged ids (one per line, TAB, note) for the forhunt skill
@@ -266,6 +282,7 @@ TargetUserName is not blank AND NOT (IpAddress = "-" OR IpAddress = "::1")
 | click / Shift+click a header | sort / add a sort column |
 | right click | header and cell menus |
 | Esc | cancel the running operation |
+| Ctrl+= / Ctrl+- / Ctrl+0, Ctrl+wheel | grid font larger / smaller / default size |
 
 On macOS, Ctrl is Cmd.
 

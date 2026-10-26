@@ -136,6 +136,9 @@ pub struct Job {
     pub query: Option<Query>,
 }
 
+/// (data row, number column) and the number shown.
+type NumCache = ((u32, Option<usize>), String);
+
 pub struct Tab {
     pub path: PathBuf,
     /// For a CSV written by forhunt: (tab name, evidence path) (D-033).
@@ -180,6 +183,9 @@ pub struct Tab {
     /// Per column with an active range condition: (blank, unparsable)
     /// cells, which that condition excludes (shown on its chip).
     pub excluded: HashMap<usize, (u64, u64)>,
+    /// Last `row_number` answer ((row, column), number): the status bar and
+    /// detail pane ask every frame, a file column costs a row read.
+    num_cache: std::cell::RefCell<Option<NumCache>>,
     /// Texts of the # column for the prepared rows.
     nums: Vec<String>,
     nums_first: u64,
@@ -293,6 +299,7 @@ impl Tab {
             bad: None,
             hits_in_view: None,
             excluded: HashMap::new(),
+            num_cache: Default::default(),
         })
     }
 
@@ -604,7 +611,7 @@ impl Tab {
     }
 
     /// Advances background work; call every frame. Returns true while
-    /// something is running (to keep repainting).
+    /// something is running or about to start (to keep repainting).
     pub fn poll(&mut self, tz_name: &str) -> bool {
         if self.tz.name != tz_name {
             self.tz = tz::Display::new(tz_name);
@@ -736,7 +743,9 @@ impl Tab {
                 self.update_hits();
             }
         }
-        self.job.is_some() || self.loader.is_some()
+        // Also while input waits for its pause: the query starts on a later
+        // frame, and nothing else would cause one (D-055).
+        self.job.is_some() || self.loader.is_some() || !settled
     }
 
     fn update_hits(&mut self) {
@@ -821,13 +830,21 @@ impl Tab {
     /// Row number of data row `r` as shown: the file's value when a column
     /// is used, else its position in the file.
     pub fn row_number(&self, r: u32) -> String {
-        if let Some(c) = self.num_col()
-            && let Ok(f) = self.table.row_fields(r as u64)
-            && let Some(v) = f.get(c)
+        let key = (r, self.num_col());
+        if let Some((k, v)) = &*self.num_cache.borrow()
+            && *k == key
         {
             return v.clone();
         }
-        (r as u64 + 1).to_string()
+        let mut n = (r as u64 + 1).to_string();
+        if let Some(c) = key.1
+            && let Ok(f) = self.table.row_fields(r as u64)
+            && let Some(v) = f.get(c)
+        {
+            n = v.clone();
+        }
+        *self.num_cache.borrow_mut() = Some((key, n.clone()));
+        n
     }
 
     /// Data row for the number `n` typed in "go to row".
@@ -915,11 +932,11 @@ impl Tab {
     }
 
     /// Adapter for the grid.
-    pub fn source<'a>(&'a mut self, tz: &'a tz::Display, dark: bool) -> TabSource<'a> {
+    pub fn source<'a>(&'a mut self, tz: &'a tz::Display, tagged: Color32) -> TabSource<'a> {
         TabSource {
             tab: self,
             tz,
-            dark,
+            tagged,
         }
     }
 }
@@ -927,7 +944,7 @@ impl Tab {
 pub struct TabSource<'a> {
     pub tab: &'a mut Tab,
     tz: &'a tz::Display,
-    dark: bool,
+    tagged: Color32,
 }
 
 impl GridSource for TabSource<'_> {
@@ -1047,11 +1064,7 @@ impl GridSource for TabSource<'_> {
     fn row_color(&self, row: u64) -> Option<Color32> {
         let r = self.tab.view.row_at(row)?;
         if self.tab.tags.contains_key(&r) {
-            return Some(if self.dark {
-                Color32::from_rgb(70, 60, 20)
-            } else {
-                Color32::from_rgb(255, 243, 190)
-            });
+            return Some(self.tagged);
         }
         None
     }

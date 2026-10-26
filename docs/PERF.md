@@ -8,6 +8,7 @@ number without a measurement. Newest sections last.
 | Id | CPU | Cores | RAM | Disk | OS |
 |----|-----|-------|-----|------|----|
 | M1 | Intel Xeon @ 2.10GHz (cloud VM) | 4 | 15 GiB | virtio block device (cloud, not local NVMe) | Linux 6.18 |
+| M2 | Apple M4 Pro (MacBook Pro, 120 Hz ProMotion display) | 12 | 24 GiB | internal SSD | macOS 26.6.2 |
 
 ## Phase 1: virtual grid spike (2026-10-22)
 
@@ -233,3 +234,46 @@ head: 2861260810 instructions
 base: 3703944836 instructions (HEAD)
 change: -22.75%
 ```
+
+## Idle CPU and repaints (2026-10-26, issue #11)
+
+Machine M2, release build, window 1500x900 on the built-in display, file
+`csv-gen gen --layout forhunt --size 2G --seed 1` (3 342 336 rows, 2.0 GiB),
+index ready, nothing touched. Frames per second: the hidden counter
+`FHV_FPS=1` prints `fps N` on stderr once per second of frames. CPU: process
+CPU time (`ps -o time=`) over 20 s, plus `top -pid`. Script: launch with
+`HOME` pointing to a scratch directory, wait 30 s (index and settle),
+measure 20 s, kill.
+
+```
+HOME=/tmp/fhv-home FHV_FPS=1 target/release/forhunt-viewer forhunt-2g.csv
+ps -o time= -p PID   # at t=30 s and t=50 s
+```
+
+| Build | Frames/s idle | CPU idle |
+|---|---:|---:|
+| 0.3.1 + master (before) | 117-121 (display refresh rate) | 20.5 % (4.31 s CPU in 21 s; `top` 19.9 %) |
+| after | 0 (no frame in 20 s) | 0.0 % (0.00 s CPU in 20 s; `top` 0.0 %) |
+
+Cause: the window title was sent as a viewport command every frame, and
+`send_viewport_cmd` requests a repaint, so egui repainted at the display's
+refresh rate forever. Other sources fixed with it (D-055): egui's spinner
+(repaints every frame while shown), the 250 ms debounce (it only worked
+because of the endless repaints), and the blinking text cursor (2 frames/s
+while a field has focus).
+
+While work runs (indexing, query, search, export, forhunt parsing) the
+progress display repaints every 100 ms (10 Hz), every 1 s when the window is
+unfocused or minimised. Indexing the 2 GiB file without cache took under a
+second here, too short to measure a rate on M2 (before: 107-121 frames/s
+while indexing); the rate is checked by the UI test
+`busy_window_repaints_at_a_throttled_rate` (no repaint delay under 100 ms
+while busy).
+
+Regression guard: `ui_tests_appearance::idle_window_does_not_repaint` opens
+a 200 000-row file, waits for the index and a search, then plays the event
+loop for 2 s (sleep for the requested repaint delay, run a frame) and
+asserts at most 2 frames. Before the fix it fails.
+
+Not measured: Linux and Windows (no machine here); the fix is not
+platform-specific.

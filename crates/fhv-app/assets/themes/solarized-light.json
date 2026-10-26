@@ -1,0 +1,82 @@
+{
+  "name": "Solarized light",
+  "dark": false,
+  "high_contrast": false,
+  "credit": "Solarized by Ethan Schoonover, MIT licence, https://ethanschoonover.com/solarized/ (text and accents darkened for contrast)",
+  "bg": "#fdf6e3",
+  "bg_window": "#fdf6e3",
+  "bg_input": "#fffbef",
+  "bg_stripe": "#f6efda",
+  "bg_header": "#eee8d5",
+  "text": "#3e5359",
+  "text_strong": "#002b36",
+  "text_weak": "#556a70",
+  "accent": "#1a6aa8",
+  "widget": "#eee8d5",
+  "hover": "#e3dcc6",
+  "active": "#d6ceb5",
+  "border": "#d6ceb5",
+  "grid_line": "#e8e1cc",
+  "selection": "#cfe2ea",
+  "search_hit": "#f7dd7a",
+  "tagged": "#f5e8b8",
+  "chip": {
+    "bg": "#e5e0cc",
+    "fg": "#073642"
+  },
+  "chip_negated": {
+    "bg": "#f6d8d0",
+    "fg": "#6e1210"
+  },
+  "error": "#b3201d",
+  "warning": "#8a4b00",
+  "active_cell": "#002b36",
+  "range_fill": "#268bd240",
+  "range_outline": "#1a6aa8",
+  "duplicate": {
+    "bg": "#f8deb0",
+    "fg": "#5a3600"
+  },
+  "unique": {
+    "bg": "#e0eebf",
+    "fg": "#2f4200"
+  },
+  "detail_highlight": {
+    "bg": "#f7e7a0",
+    "fg": "#4a3a00"
+  },
+  "rules": {
+    "red": {
+      "bg": "#f9d4d0",
+      "fg": "#7a1210"
+    },
+    "orange": {
+      "bg": "#f9dcc4",
+      "fg": "#6b3000"
+    },
+    "yellow": {
+      "bg": "#f5e9a8",
+      "fg": "#4d3d00"
+    },
+    "green": {
+      "bg": "#e0eebf",
+      "fg": "#2f4200"
+    },
+    "teal": {
+      "bg": "#cdeee6",
+      "fg": "#0a4a40"
+    },
+    "blue": {
+      "bg": "#d2e6f7",
+      "fg": "#0d3d6b"
+    },
+    "purple": {
+      "bg": "#e4dcf5",
+      "fg": "#3d2a75"
+    },
+    "gray": {
+      "bg": "#e6e1d0",
+      "fg": "#33393a"
+    }
+  }
+}

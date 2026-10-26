@@ -8,6 +8,7 @@
 //! ```
 
 mod app;
+mod appearance;
 mod convert;
 mod fonts;
 mod grid;
@@ -17,9 +18,12 @@ mod querybar;
 mod session;
 mod settings;
 mod tab;
+mod theme;
 mod tz;
 #[cfg(test)]
 mod ui_tests;
+#[cfg(test)]
+mod ui_tests_appearance;
 
 use std::path::PathBuf;
 

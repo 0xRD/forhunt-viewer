@@ -1,0 +1,82 @@
+{
+  "name": "Nord",
+  "dark": true,
+  "high_contrast": false,
+  "credit": "Nord by Arctic Ice Studio, MIT licence, https://www.nordtheme.com (red and orange lightened for contrast)",
+  "bg": "#2e3440",
+  "bg_window": "#2e3440",
+  "bg_input": "#272c36",
+  "bg_stripe": "#333a47",
+  "bg_header": "#3b4252",
+  "text": "#d8dee9",
+  "text_strong": "#eceff4",
+  "text_weak": "#aeb7c6",
+  "accent": "#88c0d0",
+  "widget": "#3b4252",
+  "hover": "#434c5e",
+  "active": "#4c566a",
+  "border": "#434c5e",
+  "grid_line": "#3b4252",
+  "selection": "#434c5e",
+  "search_hit": "#5c5233",
+  "tagged": "#4c4835",
+  "chip": {
+    "bg": "#3b4252",
+    "fg": "#eceff4"
+  },
+  "chip_negated": {
+    "bg": "#553a40",
+    "fg": "#f5c4c8"
+  },
+  "error": "#e8939a",
+  "warning": "#e5a48f",
+  "active_cell": "#ebcb8b",
+  "range_fill": "#5e81ac66",
+  "range_outline": "#88c0d0",
+  "duplicate": {
+    "bg": "#574536",
+    "fg": "#ebcb8b"
+  },
+  "unique": {
+    "bg": "#3a4a3a",
+    "fg": "#a3be8c"
+  },
+  "detail_highlight": {
+    "bg": "#5c5233",
+    "fg": "#ebcb8b"
+  },
+  "rules": {
+    "red": {
+      "bg": "#553a40",
+      "fg": "#f0b3b8"
+    },
+    "orange": {
+      "bg": "#56453d",
+      "fg": "#e8b4a0"
+    },
+    "yellow": {
+      "bg": "#585036",
+      "fg": "#ebcb8b"
+    },
+    "green": {
+      "bg": "#3d4c3a",
+      "fg": "#b9d1a3"
+    },
+    "teal": {
+      "bg": "#344d52",
+      "fg": "#8fd0d0"
+    },
+    "blue": {
+      "bg": "#36465e",
+      "fg": "#a9c6e8"
+    },
+    "purple": {
+      "bg": "#4a3e52",
+      "fg": "#d7b8d4"
+    },
+    "gray": {
+      "bg": "#434c5e",
+      "fg": "#e5e9f0"
+    }
+  }
+}
