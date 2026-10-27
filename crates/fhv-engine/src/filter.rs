@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::columns::{Columns, Kind, Num, field_bytes, parse_num};
 use crate::scan::nth_field;
 use crate::table::Table;
-use crate::time::{self, Order};
+use crate::time::{self, Fmt, Order};
 use crate::{Error, Result};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -158,7 +158,7 @@ pub struct Compiled {
     /// Text fallback bounds for ranges.
     text_lo: Option<Vec<u8>>,
     text_hi: Option<Vec<u8>>,
-    order: Option<Order>,
+    order: Option<Fmt>,
 }
 
 fn lower(b: &[u8]) -> Vec<u8> {
@@ -242,7 +242,7 @@ impl Compiled {
         // second); other bounds start at its first tick (D-034).
         let bound = |s: &str, upper_incl: bool| -> Option<Bound> {
             if let Some(o) = order
-                && let Some((t, span)) = time::parse_span(s.as_bytes(), o)
+                && let Some((t, span, _)) = time::parse_operand(s.as_bytes(), o)
             {
                 return Some(Bound::Time(if upper_incl {
                     t.saturating_add(span - 1)
@@ -263,9 +263,9 @@ impl Compiled {
             };
             if let Some(v) = operands
                 .into_iter()
-                .find(|v| time::parse(v.as_bytes(), o).is_none())
+                .find(|v| time::parse_operand(v.as_bytes(), o).is_none())
             {
-                let own = match o {
+                let own = match o.order {
                     Order::Mdy => ", 3/11/2024 10:00 AM",
                     Order::Dmy => ", 11/3/2024 10:00",
                     Order::Ymd => "",

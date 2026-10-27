@@ -89,8 +89,17 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   - Delimiters `,` `;` tab `|`, auto-detected. When the header row was only a
     guess, the status bar says so; File > *Reopen with options…* sets the
     header and delimiter by hand.
-  - Dates: day/month order is detected per column and can be set in the
-    column menu. A range filter shows on its chip how many cells it could
+  - Dates: detected per column in many shapes: ISO 8601 / RFC 3339 (basic
+    format, 3-9 fraction digits, offsets), RFC 2822, d/M and M/d (12 h
+    clocks), month names in English and French, Apache CLF, year-less syslog
+    (the year assumed from the file date is flagged), Unix s / ms / µs / ns,
+    FILETIME, .NET ticks, Chrome/WebKit, and Excel / Cocoa / day counts when
+    the header says so ([docs/DATE-FORMATS.md](docs/DATE-FORMATS.md)).
+    Right-click a header > *Date format…* to pick a preset, type a custom
+    `strftime` format (live preview, unparsable count), set the zone of
+    times without an offset or the year of year-less dates; the choice is
+    kept in sessions and per file. Epoch numbers show as times.
+    A range filter shows on its chip how many cells it could
     not read as dates or numbers, so rows are never left out silently.
 - **Display time zone.** Times are converted for display only; the data
   stays as in the file. In date filters (`>`, `<`, between), a time typed

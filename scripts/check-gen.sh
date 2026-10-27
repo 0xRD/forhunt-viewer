@@ -14,7 +14,7 @@ GEN="$ROOT/target/release/csv-gen"
 sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 
 {
-  for layout in forhunt mft hayabusa plaso generic; do
+  for layout in forhunt mft hayabusa plaso generic dates; do
     for t in 1 0; do
       RAYON_NUM_THREADS=$t "$GEN" gen --layout "$layout" --rows 40000 --seed 7 -o "$OUT/$layout.$t.csv" 2>/dev/null
     done

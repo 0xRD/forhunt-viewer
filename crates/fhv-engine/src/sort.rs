@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::columns::{self, Columns, Kind, Num, field_bytes, parse_num};
 use crate::scan::nth_field;
 use crate::table::Table;
-use crate::time::{self, Order};
+use crate::time::{self, Fmt};
 use crate::{Error, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,7 +45,7 @@ const BLOCK: u64 = 32_768;
 enum PartKind {
     Ticks,
     Rank,
-    ParseTime(Order),
+    ParseTime(Fmt),
     Number,
     Text,
 }

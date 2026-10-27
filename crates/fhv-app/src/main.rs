@@ -10,6 +10,7 @@
 mod app;
 mod appearance;
 mod convert;
+mod datefmt;
 mod fonts;
 mod grid;
 #[cfg(target_os = "macos")]

@@ -32,7 +32,10 @@ fn summarise(t: &Table) -> String {
             .iter()
             .take(12)
             .map(|c| {
-                let mut k = format!("{:?}", c.kind);
+                let mut k = match c.kind {
+                    fhv_engine::columns::Kind::Time(f) => format!("Time({})", f.spec()),
+                    k => format!("{k:?}"),
+                };
                 if let Some(d) = &c.dict {
                     k.push_str(&format!("+dict({})", d.values.len()));
                 }

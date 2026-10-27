@@ -6,7 +6,7 @@ crlf: true
 columns (4): ["Time", "EventId", "User", "Message"]
 rows: 3
 structural_bad: []
-kinds: Time(Ymd)+dict(3)+ticks, Number+dict(3), Text+dict(2), Text+dict(3)
+kinds: Time(text)+dict(3)+ticks, Number+dict(3), Text+dict(2), Text+dict(3)
 primary_time: Some(0)
 ragged: []
 row 0 (4 fields): "2024-03-11 10:00:00.0000000", "4624", "jdoe", "Logon"

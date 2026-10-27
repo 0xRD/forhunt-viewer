@@ -26,6 +26,10 @@ pub trait GridSource {
     fn header_suffix(&self, _col: usize) -> String {
         String::new()
     }
+    /// Tooltip of a header (e.g. the date format of the column).
+    fn header_tip(&self, _col: usize) -> Option<String> {
+        None
+    }
     /// Called once per frame with the rows about to be drawn, before any
     /// `cell` call, so the source can fetch them in one go.
     fn prepare(&mut self, rows: Range<u64>);
@@ -373,7 +377,12 @@ pub fn show(
         if clip.width() <= 0.0 {
             continue;
         }
-        let hr = ui.interact(clip, id.with(("hdr", c)), Sense::click());
+        let mut hr = ui.interact(clip, id.with(("hdr", c)), Sense::click());
+        if hr.hovered()
+            && let Some(tip) = src.header_tip(c)
+        {
+            hr = hr.on_hover_text(tip);
+        }
         if hr.hovered() {
             painter.rect_filled(clip, 0.0, visuals.widgets.hovered.weak_bg_fill);
         }

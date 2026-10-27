@@ -96,6 +96,9 @@ pub enum Layout {
     Plaso,
     /// Generic mixed-type table (EU dates, floats, free text)
     Generic,
+    /// One column per date format (ISO variants, RFC 2822, d/M and M/d,
+    /// month names, French, syslog, CLF, epoch numbers, FILETIME...)
+    Dates,
 }
 
 impl Layout {
@@ -106,6 +109,7 @@ impl Layout {
             Layout::Hayabusa => HAYABUSA_HEADER,
             Layout::Plaso => PLASO_HEADER,
             Layout::Generic => GENERIC_HEADER,
+            Layout::Dates => DATES_HEADER,
         }
     }
 
@@ -119,6 +123,7 @@ impl Layout {
                 Layout::Hayabusa => hayabusa_row(&mut rng, i, out),
                 Layout::Plaso => plaso_row(&mut rng, i, out),
                 Layout::Generic => generic_row(&mut rng, i, out),
+                Layout::Dates => dates_row(&mut rng, i, out),
             }
             out.end();
         }
@@ -940,4 +945,48 @@ fn generic_row(rng: &mut Rng, i: u64, out: &mut Out) {
     }
     out.cell(&c);
     out.cell("");
+}
+
+const DATES_HEADER: &[&str] = &[
+    "id",
+    "Timestamp",
+    "iso_offset",
+    "iso_basic",
+    "rfc2822",
+    "eu_date",
+    "us_date_12h",
+    "dd_mon_yyyy",
+    "french",
+    "syslog",
+    "clf",
+    "epoch_s",
+    "epoch_ms",
+    "filetime",
+    "webkit",
+    "excel_date",
+    "message",
+];
+
+fn dates_row(rng: &mut Rng, i: u64, out: &mut Out) {
+    out.num(i + 1);
+    let t = global_time(rng, i, 200);
+    out.cell(&time::iso(t));
+    out.cell(&time::iso_offset(t, 120));
+    out.cell(&time::iso_basic(t));
+    out.cell(&time::rfc2822(t));
+    out.cell(&time::eu(t));
+    out.cell(&time::us_12h(t));
+    out.cell(&time::dd_mon_yyyy(t));
+    out.cell(&time::french(t));
+    out.cell(&time::syslog(t));
+    out.cell(&time::clf(t, 60));
+    out.num((t / TICKS_PER_SEC) as u64);
+    out.num((t / 10_000) as u64);
+    out.num((t + time::EPOCH_1601) as u64);
+    out.num(((t + time::EPOCH_1601) / 10) as u64);
+    out.cell(&format!(
+        "{:.5}",
+        t as f64 / (86_400.0 * TICKS_PER_SEC as f64) + 25_569.0
+    ));
+    out.cell(rng.pick(&["login", "logout", "error", "Accepted password for root"]));
 }

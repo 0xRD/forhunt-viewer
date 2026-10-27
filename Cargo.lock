@@ -1502,6 +1502,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "csv-gen",
+ "jiff",
  "memchr",
  "memmap2",
  "proptest",

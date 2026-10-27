@@ -145,6 +145,9 @@ pub struct Tab {
     pub origin: Option<(String, String)>,
     pub table: Arc<Table>,
     pub engine: Arc<Engine>,
+    /// Column kinds were set by the analyst since the app last saved them
+    /// in the per-file settings cache.
+    pub formats_changed: bool,
     loader: Option<Receiver<Result<(), String>>>,
     pub load_error: Option<String>,
     pub filters: Vec<ColFilter>,
@@ -170,7 +173,7 @@ pub struct Tab {
     pub order: Vec<usize>,
     pub widths: HashMap<usize, f32>,
     pub grid: GridState,
-    rows: Rows,
+    pub(crate) rows: Rows,
     rows_key: Option<(u64, Range<u64>)>,
     /// Display zone: time-column range operands are read in it (D-038).
     tz: tz::Display,
@@ -290,6 +293,7 @@ impl Tab {
             rows_key: None,
             tz: tz::Display::new("UTC"),
             last_query: None,
+            formats_changed: false,
             nums: Vec::new(),
             nums_first: 0,
             detected,
@@ -355,14 +359,65 @@ impl Tab {
         self.engine.kind(c)
     }
 
+    /// Kind of column `c` as profiled (before any override).
+    pub fn detected_kind(&self, c: usize) -> Kind {
+        self.table
+            .column_index()
+            .and_then(|ci| ci.cols.get(c).map(|x| x.kind))
+            .unwrap_or(Kind::Text)
+    }
+
     /// Sets the day/month order of the dates of column `c` (None: as
     /// detected). Filters, sorts and display follow it.
     pub fn set_date_order(&mut self, c: usize, order: Option<fhv_engine::time::Order>) {
-        self.engine.set_kind(c, order.map(Kind::Time));
+        let base = match self.detected_kind(c) {
+            Kind::Time(f) if f.shape == fhv_engine::time::Shape::Text => f,
+            _ => fhv_engine::time::Fmt::default(),
+        };
+        self.set_kind(
+            c,
+            order.map(|order| Kind::Time(fhv_engine::time::Fmt { order, ..base })),
+        );
+    }
+
+    /// Sets how column `c` is read (a date format, or not a date; None: as
+    /// detected). Filters, sorts and display follow it.
+    pub fn set_kind(&mut self, c: usize, kind: Option<Kind>) {
+        self.engine.set_kind(c, kind);
         self.rows_key = None;
+        self.formats_changed = true;
         // Same query, different meaning: run it again.
         self.last_query = None;
         self.requery();
+    }
+
+    /// Analyst-set kinds by column name, as spec strings (sessions and the
+    /// per-file settings cache).
+    pub fn kind_specs(&self) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = self
+            .engine
+            .kind_overrides()
+            .into_iter()
+            .map(|(c, k)| (self.table.columns[c].clone(), crate::session::kind_spec(k)))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Applies kinds saved by name; returns the names not in this file or
+    /// with a spec that no longer reads.
+    pub fn apply_kind_specs(&mut self, specs: &[(String, String)]) -> Vec<String> {
+        let mut bad = Vec::new();
+        for (n, spec) in specs {
+            match (
+                self.table.columns.iter().position(|c| c == n),
+                crate::session::kind_from_spec(spec),
+            ) {
+                (Some(c), Some(k)) => self.set_kind(c, Some(k)),
+                _ => bad.push(n.clone()),
+            }
+        }
+        bad
     }
 
     /// Time / number columns with a range condition.
@@ -986,7 +1041,20 @@ impl GridSource for TabSource<'_> {
         if self.tab.filters.get(c).is_some_and(ColFilter::is_active) {
             s.push_str(" ≡");
         }
+        if let Kind::Time(f) = self.tab.kind(c)
+            && f.year_assumed()
+        {
+            s.push_str(" (year?)");
+        }
         s
+    }
+
+    fn header_tip(&self, col: usize) -> Option<String> {
+        let c = self.tab.file_col(col)?;
+        match self.tab.kind(c) {
+            Kind::Time(f) => Some(format!("dates: {}", f.describe())),
+            _ => None,
+        }
     }
 
     fn prepare(&mut self, rows: Range<u64>) {
@@ -1022,13 +1090,16 @@ impl GridSource for TabSource<'_> {
         if r.is_err() {
             return;
         }
-        // Display time zone for time columns.
-        if !self.tz.is_utc() && tab.table.column_index().is_some() {
+        // Display time zone for time columns, and parsed times of columns
+        // whose cells are not the instant as written (epoch numbers...).
+        if tab.table.column_index().is_some() {
             for c in 0..tab.table.columns.len() {
-                if let Kind::Time(order) = tab.engine.kind(c) {
+                if let Kind::Time(f) = tab.engine.kind(c)
+                    && (!self.tz.is_utc() || f.rewrites())
+                {
                     for p in rows.clone() {
                         if let Some(cell) = tab.rows.cell_mut(p, c)
-                            && let Some(v) = self.tz.convert(cell, order)
+                            && let Some(v) = self.tz.convert(cell, f)
                         {
                             *cell = v;
                         }

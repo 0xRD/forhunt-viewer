@@ -23,6 +23,9 @@ pub struct Settings {
     pub search_only_matches: bool,
     /// Row-number column mode per file path (D-042); absent = Auto.
     pub row_num: std::collections::BTreeMap<String, RowNumMode>,
+    /// Date formats set on columns, per file path: (column, spec) as in
+    /// sessions (D-051).
+    pub date_formats: std::collections::BTreeMap<String, Vec<(String, String)>>,
     /// Theme name or "System" (D-056); None: from `dark` (older settings).
     pub theme: Option<String>,
     /// Grid font, its size in points, monospace-only font list (D-057).
@@ -76,6 +79,7 @@ impl Default for Settings {
             query_case_sensitive: false,
             search_only_matches: true,
             row_num: Default::default(),
+            date_formats: Default::default(),
             theme: None,
             grid_font: GridFont::default(),
             grid_font_size: FONT_SIZE,

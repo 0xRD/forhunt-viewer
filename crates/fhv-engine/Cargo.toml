@@ -20,6 +20,8 @@ roaring.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Zones of date columns written without an offset (D-051).
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-platform", "tzdb-zoneinfo"] }
 
 [dev-dependencies]
 csv-gen = { path = "../../tools/csv-gen" }

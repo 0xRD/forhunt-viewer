@@ -803,26 +803,19 @@ impl Table {
 }
 
 fn save_columns(w: &mut crate::cache::Writer, cols: &Columns) {
-    use crate::time::Order;
     w.u64(cols.cols.len() as u64);
     w.u64(cols.primary_time.map_or(u64::MAX, |c| c as u64));
     w.bitmap(&cols.ragged);
     w.bitmap(&cols.odd_quotes);
     for c in &cols.cols {
-        let (k, o) = match c.kind {
-            columns::Kind::Text => (0, 0),
-            columns::Kind::Number => (1, 0),
-            columns::Kind::Time(o) => (
-                2,
-                match o {
-                    Order::Ymd => 0,
-                    Order::Mdy => 1,
-                    Order::Dmy => 2,
-                },
-            ),
+        let (k, spec) = match c.kind {
+            columns::Kind::Text => (0, String::new()),
+            columns::Kind::Number => (1, String::new()),
+            columns::Kind::Time(f) => (2, f.spec()),
         };
         w.u8(k);
-        w.u8(o);
+        w.bytes(spec.as_bytes());
+        w.u8(c.numeric as u8);
         match &c.dict {
             Some(d) => {
                 w.u8(1);
@@ -857,7 +850,6 @@ fn load_columns(
     ncols: usize,
     index_rows: u64,
 ) -> Result<Columns> {
-    use crate::time::Order;
     let bad = || Error::Cache("columns section".into());
     if c.u64()? as usize != ncols {
         return Err(bad());
@@ -869,17 +861,12 @@ fn load_columns(
     let mut cols = Vec::with_capacity(ncols);
     for _ in 0..ncols {
         let k = c.u8()?;
-        let o = c.u8()?;
-        let order = match o {
-            0 => Order::Ymd,
-            1 => Order::Mdy,
-            2 => Order::Dmy,
-            _ => return Err(bad()),
-        };
+        let spec = String::from_utf8_lossy(c.bytes()?).into_owned();
+        let numeric = c.u8()? == 1;
         let kind = match k {
             0 => columns::Kind::Text,
             1 => columns::Kind::Number,
-            2 => columns::Kind::Time(order),
+            2 => columns::Kind::Time(crate::time::Fmt::from_spec(&spec).map_err(|_| bad())?),
             _ => return Err(bad()),
         };
         let dict = if c.u8()? == 1 {
@@ -914,7 +901,12 @@ fn load_columns(
         } else {
             None
         };
-        cols.push(columns::Column { kind, dict, time });
+        cols.push(columns::Column {
+            kind,
+            numeric,
+            dict,
+            time,
+        });
     }
     Ok(Columns {
         cols,

@@ -324,10 +324,10 @@ fn time_ranges_reject_operands_that_are_not_times() {
     }
     let fx = open(&csv);
     let ci = fx.engine.table().column_index().unwrap();
-    assert_eq!(
+    assert!(matches!(
         ci.cols[1].kind,
-        fhv_engine::columns::Kind::Time(fhv_engine::time::Order::Mdy)
-    );
+        fhv_engine::columns::Kind::Time(f) if f.order == fhv_engine::time::Order::Mdy
+    ));
     let eval = |c: usize, op: Op| {
         fx.engine.eval(&Expr::Pred(Pred {
             target: Target::Column(c),
@@ -442,10 +442,10 @@ fn date_order_override_and_unparsable_counts() {
     let fx = open(&csv);
     let e = &fx.engine;
     // Undecided order: year-first, or month first for slash dates.
-    assert_eq!(
+    assert!(matches!(
         e.kind(0),
-        fhv_engine::columns::Kind::Time(fhv_engine::time::Order::Ymd)
-    );
+        fhv_engine::columns::Kind::Time(f) if f.order == fhv_engine::time::Order::Ymd
+    ));
     assert_eq!(e.unparsable(0).unwrap(), (1, 2));
     let between = Op::Between("2025-03-01".into(), "2025-03-31".into());
     // Month first: "12/3/2025" is 3 December, "3/4/2025" is 4 March...
@@ -454,7 +454,7 @@ fn date_order_override_and_unparsable_counts() {
     e.set_kind(
         0,
         Some(fhv_engine::columns::Kind::Time(
-            fhv_engine::time::Order::Dmy,
+            fhv_engine::time::Order::Dmy.into(),
         )),
     );
     assert_eq!(rows(&fx, 0, between.clone()), march);

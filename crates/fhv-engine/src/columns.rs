@@ -6,10 +6,12 @@
 //!   (capped at `DICT_MAX` values, abandoned past it). Any predicate on such a
 //!   column is evaluated once per distinct value, and the value list
 //!   (with counts) of the filter dropdown is free.
-//! - **time**: ≥ 90 % of non-blank sampled cells parse as a date-time. The
-//!   primary time column (first one, or one with a well-known name) is
-//!   parsed for every row into ticks, plus a permutation sorted by
-//!   (time, row) unless the file is already in time order.
+//! - **time**: ≥ 90 % of non-blank sampled cells parse as date text, or
+//!   the column holds epoch numbers whose values all fall in a plausible
+//!   range for one unit (see [`epoch_shape`]). The primary time column
+//!   (first one, or one with a well-known name) is parsed for every row
+//!   into ticks, plus a permutation sorted by (time, row) unless the file
+//!   is already in time order.
 //! - **number**: ≥ 99 % of non-blank sampled cells parse as numbers;
 //!   decides numeric comparisons and sort.
 //!
@@ -22,7 +24,7 @@ use rustc_hash::FxHashMap;
 
 use crate::scan::{Span, Tables, unquote};
 use crate::table::{Block, Table};
-use crate::time::{self, Order};
+use crate::time::{self, Fmt, Hint, Order, Shape};
 use crate::{Error, Result};
 
 pub const SAMPLE_ROWS: u64 = 20_000;
@@ -34,7 +36,7 @@ const BLOCK_ROWS: u64 = 32_768;
 pub enum Kind {
     Text,
     Number,
-    Time(Order),
+    Time(Fmt),
 }
 
 /// Per-value row bitmaps of a low-cardinality column.
@@ -76,6 +78,9 @@ impl TimeIndex {
 #[derive(Clone, Debug)]
 pub struct Column {
     pub kind: Kind,
+    /// ≥ 99 % of the sampled non-blank cells are numbers (the kind of the
+    /// column when it is not read as dates).
+    pub numeric: bool,
     pub dict: Option<Dict>,
     pub time: Option<TimeIndex>,
 }
@@ -221,6 +226,12 @@ struct Profile {
     numbers: u64,
     order: Option<Order>,
     order_conflict: bool,
+    /// Sampled cells per kind of date text.
+    hints: Vec<(Hint, u64)>,
+    /// Plain decimal numbers (no sign, hex or exponent), zero excluded,
+    /// and per epoch candidate how many fall in the narrow / wide range.
+    plain: u64,
+    epoch: [(u64, u64); time::EPOCH_CANDIDATES.len()],
 }
 
 /// Decides column kinds and index candidates from a sample of rows.
@@ -238,6 +249,9 @@ fn profile(table: &Table) -> Result<Vec<Profile>> {
             numbers: 0,
             order: None,
             order_conflict: false,
+            hints: Vec::new(),
+            plain: 0,
+            epoch: Default::default(),
         })
         .collect();
     // Head of the file plus rows spread over it.
@@ -312,14 +326,121 @@ fn sample_cell(p: &mut Profile, cell: &(Vec<u8>, bool), quote: Option<u8>, tmp: 
     if parse_number(v).is_some() {
         p.numbers += 1;
     }
-    if time::parse(v, Order::Mdy).is_some() || time::parse(v, Order::Dmy).is_some() {
+    let hint = time::text_hint(v, Order::Mdy).or_else(|| {
+        // Only year-last numeric dates depend on the order.
+        v.first()
+            .is_some_and(u8::is_ascii_digit)
+            .then(|| time::text_hint(v, Order::Dmy))
+            .flatten()
+    });
+    if let Some(h) = hint {
         p.times += 1;
+        match p.hints.iter_mut().find(|x| x.0 == h) {
+            Some(x) => x.1 += 1,
+            None => p.hints.push((h, 1)),
+        }
         match (time::order_hint(v), p.order) {
             (Some(o), None) => p.order = Some(o),
             (Some(o), Some(prev)) if o != prev => p.order_conflict = true,
             _ => {}
         }
+    } else if v.len() <= 30
+        && v.iter().all(|c| c.is_ascii_digit() || *c == b'.')
+        && v.iter().any(|c| *c != b'0' && *c != b'.')
+        && let Some(ts) = time::epoch_ticks(v)
+    {
+        p.plain += 1;
+        for (e, t) in p.epoch.iter_mut().zip(ts) {
+            e.0 += NARROW.contains(&t) as u64;
+            e.1 += WIDE.contains(&t) as u64;
+        }
     }
+}
+
+/// Format of a column of date text: day/month order from the sampled
+/// values, the dominant kind of text, and for year-less dates the year
+/// (and month) of the file's last modification (D-050).
+fn text_fmt(p: &Profile, year: i32, roll: u8) -> Fmt {
+    let order = if p.order_conflict {
+        Order::Ymd
+    } else {
+        p.order.unwrap_or(Order::Ymd)
+    };
+    let top = p.hints.iter().max_by_key(|h| h.1).copied();
+    let hint = match top {
+        Some((h, n)) if n * 10 >= p.times * 9 => h,
+        _ => Hint::Mixed,
+    };
+    let yearless = p.hints.iter().any(|h| h.0 == Hint::YearLess);
+    Fmt {
+        order,
+        hint,
+        year: if yearless { year } else { 0 },
+        roll: if yearless { roll } else { 12 },
+        ..Fmt::default()
+    }
+}
+
+/// Year and month of the file's modification time (now if unknown).
+fn file_year(table: &Table) -> (i32, u8) {
+    let t = std::fs::metadata(&table.path)
+        .and_then(|m| m.modified())
+        .unwrap_or_else(|_| std::time::SystemTime::now());
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let (y, m, _) = time::civil_from_days(secs.div_euclid(86_400));
+    (y as i32, m as u8)
+}
+
+/// Plausible instants of epoch numbers: 1990..2040 for detection by value
+/// range alone, 1971..2100 when the header names a time.
+const NARROW: std::ops::Range<i64> =
+    631_152_000 * time::TICKS_PER_SEC..2_208_988_800 * time::TICKS_PER_SEC;
+const WIDE: std::ops::Range<i64> =
+    31_536_000 * time::TICKS_PER_SEC..4_102_444_800 * time::TICKS_PER_SEC;
+
+/// Header words that make a numeric column a time column.
+fn time_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [
+        "time", "date", "stamp", "created", "modified", "accessed", "changed", "written",
+        "updated", "epoch", "when", "visit", "expir", "birth",
+    ]
+    .iter()
+    .any(|w| n.contains(w))
+        || n == "ts"
+        || n.ends_with("_ts")
+        || n.starts_with("ts_")
+        || n.ends_with("_at")
+}
+
+/// Epoch unit of a numeric column, if its sample makes it unambiguous
+/// (D-050): every plain non-zero sampled value is in 1990..2040 for one
+/// unit; or the header names a time and ≥ 99 % are in 1971..2100. Excel,
+/// Cocoa and day counts overlap ordinary numbers and need their own word in
+/// the header. Units are tried from the narrowest range of magnitudes up.
+fn epoch_shape(p: &Profile, name: &str) -> Option<Shape> {
+    if p.plain == 0 || p.numbers * 100 < p.nonblank * 99 || p.plain * 100 < p.numbers * 99 {
+        return None;
+    }
+    let lname = name.to_ascii_lowercase();
+    let timeish = time_name(name);
+    let cands = || time::EPOCH_CANDIDATES.iter().zip(&p.epoch);
+    let named = |words: &[&str]| words.iter().any(|w| lname.contains(w));
+    let wide_ok = |wide: u64| wide * 100 >= p.plain * 99;
+    cands()
+        .find(|((_, words), (narrow, wide))| {
+            if words.is_empty() {
+                *narrow == p.plain
+            } else {
+                named(words) && wide_ok(*wide)
+            }
+        })
+        .or_else(|| {
+            cands().find(|((_, words), (_, wide))| timeish && words.is_empty() && wide_ok(*wide))
+        })
+        .map(|((s, _), _)| *s)
 }
 
 type ValueBitmaps = Vec<(Vec<u8>, RoaringBitmap)>;
@@ -345,16 +466,20 @@ pub fn build(table: &Table) -> Result<Columns> {
     let quote = table.dialect.quote;
     let t = table.tables();
     let profs = profile(table)?;
+    let (year, roll) = file_year(table);
+    let numeric: Vec<bool> = profs
+        .iter()
+        .map(|p| p.nonblank > 0 && p.numbers * 100 >= p.nonblank * 99)
+        .collect();
     let kinds: Vec<Kind> = profs
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(c, p)| {
             if p.nonblank > 0 && p.times * 10 >= p.nonblank * 9 {
-                Kind::Time(if p.order_conflict {
-                    Order::Ymd
-                } else {
-                    p.order.unwrap_or(Order::Ymd)
-                })
-            } else if p.nonblank > 0 && p.numbers * 100 >= p.nonblank * 99 {
+                Kind::Time(text_fmt(p, year, roll))
+            } else if let Some(s) = epoch_shape(p, &table.columns[c]) {
+                Kind::Time(Fmt::shape(s))
+            } else if numeric[c] {
                 Kind::Number
             } else {
                 Kind::Text
@@ -374,8 +499,8 @@ pub fn build(table: &Table) -> Result<Columns> {
         .find(|&c| TIME_NAMES.contains(&table.columns[c].to_ascii_lowercase().as_str()))
         .or_else(|| time_cols.first().copied());
     let time_order = primary_time.map(|c| match kinds[c] {
-        Kind::Time(o) => o,
-        _ => Order::Ymd,
+        Kind::Time(f) => f,
+        _ => Fmt::default(),
     });
 
     // Global dictionaries.
@@ -532,8 +657,10 @@ pub fn build(table: &Table) -> Result<Columns> {
 
     let mut cols: Vec<Column> = kinds
         .iter()
-        .map(|&kind| Column {
+        .zip(&numeric)
+        .map(|(&kind, &numeric)| Column {
             kind,
+            numeric,
             dict: None,
             time: None,
         })

@@ -91,6 +91,133 @@ pub fn l2t(ticks: i64) -> (String, String) {
     )
 }
 
+/// 1601-01-01 (FILETIME, WebKit) in ticks since 1970.
+pub const EPOCH_1601: i64 = 116_444_736_000_000_000;
+
+const MON: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+const MOIS: [&str; 12] = [
+    "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.",
+    "déc.",
+];
+const WD: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+
+fn weekday(ticks: i64) -> &'static str {
+    WD[ticks.div_euclid(86_400 * TICKS_PER_SEC).rem_euclid(7) as usize]
+}
+
+/// `yyyy-MM-ddTHH:mm:ss.fff+HH:MM` at `off_min` east of UTC.
+pub fn iso_offset(ticks: i64, off_min: i64) -> String {
+    let c = civil(ticks + off_min * 60 * TICKS_PER_SEC);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}{}{:02}:{:02}",
+        c.y,
+        c.mo,
+        c.d,
+        c.h,
+        c.mi,
+        c.s,
+        c.frac / 10_000,
+        if off_min < 0 { '-' } else { '+' },
+        off_min.abs() / 60,
+        off_min.abs() % 60
+    )
+}
+
+/// ISO 8601 basic format `yyyyMMddTHHmmssZ`.
+pub fn iso_basic(ticks: i64) -> String {
+    let c = civil(ticks);
+    format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+        c.y, c.mo, c.d, c.h, c.mi, c.s
+    )
+}
+
+/// RFC 2822 / HTTP `Fri, 01 Mar 2024 12:34:56 GMT`.
+pub fn rfc2822(ticks: i64) -> String {
+    let c = civil(ticks);
+    format!(
+        "{}, {:02} {} {:04} {:02}:{:02}:{:02} GMT",
+        weekday(ticks),
+        c.d,
+        MON[c.mo as usize - 1],
+        c.y,
+        c.h,
+        c.mi,
+        c.s
+    )
+}
+
+/// `M/d/yyyy h:mm:ss AM` (US locale).
+pub fn us_12h(ticks: i64) -> String {
+    let c = civil(ticks);
+    let h = if c.h.is_multiple_of(12) { 12 } else { c.h % 12 };
+    let ap = if c.h < 12 { "AM" } else { "PM" };
+    format!(
+        "{}/{}/{:04} {h}:{:02}:{:02} {ap}",
+        c.mo, c.d, c.y, c.mi, c.s
+    )
+}
+
+/// `01-Mar-2024 12:34:56`.
+pub fn dd_mon_yyyy(ticks: i64) -> String {
+    let c = civil(ticks);
+    format!(
+        "{:02}-{}-{:04} {:02}:{:02}:{:02}",
+        c.d,
+        MON[c.mo as usize - 1],
+        c.y,
+        c.h,
+        c.mi,
+        c.s
+    )
+}
+
+/// French `1 mars 2024 12:34:56`.
+pub fn french(ticks: i64) -> String {
+    let c = civil(ticks);
+    format!(
+        "{} {} {:04} {:02}:{:02}:{:02}",
+        c.d,
+        MOIS[c.mo as usize - 1],
+        c.y,
+        c.h,
+        c.mi,
+        c.s
+    )
+}
+
+/// Syslog without a year: `Mar  1 12:34:56`.
+pub fn syslog(ticks: i64) -> String {
+    let c = civil(ticks);
+    format!(
+        "{} {:2} {:02}:{:02}:{:02}",
+        MON[c.mo as usize - 1],
+        c.d,
+        c.h,
+        c.mi,
+        c.s
+    )
+}
+
+/// Apache / CLF `[01/Mar/2024:13:34:56 +0100]` at `off_min` east of UTC.
+pub fn clf(ticks: i64, off_min: i64) -> String {
+    let c = civil(ticks + off_min * 60 * TICKS_PER_SEC);
+    format!(
+        "[{:02}/{}/{:04}:{:02}:{:02}:{:02} {}{:02}{:02}]",
+        c.d,
+        MON[c.mo as usize - 1],
+        c.y,
+        c.h,
+        c.mi,
+        c.s,
+        if off_min < 0 { '-' } else { '+' },
+        off_min.abs() / 60,
+        off_min.abs() % 60
+    )
+}
+
 /// `d/M/yyyy HH:mm` (European spreadsheet export).
 pub fn eu(ticks: i64) -> String {
     let c = civil(ticks);
@@ -110,5 +237,14 @@ mod tests {
         assert_eq!(hayabusa(T0 + 5_000_000), "2024-03-01 00:00:00.500 +00:00");
         assert_eq!(iso(T0), "2024-03-01T00:00:00.000000Z");
         assert_eq!(eu(T0), "1/3/2024 00:00");
+        let t1 = T0 + 45_296 * TICKS_PER_SEC;
+        assert_eq!(iso_offset(t1, 120), "2024-03-01T14:34:56.000+02:00");
+        assert_eq!(iso_basic(t1), "20240301T123456Z");
+        assert_eq!(rfc2822(t1), "Fri, 01 Mar 2024 12:34:56 GMT");
+        assert_eq!(us_12h(t1), "3/1/2024 12:34:56 PM");
+        assert_eq!(dd_mon_yyyy(t1), "01-Mar-2024 12:34:56");
+        assert_eq!(french(t1), "1 mars 2024 12:34:56");
+        assert_eq!(syslog(t1), "Mar  1 12:34:56");
+        assert_eq!(clf(t1, 60), "[01/Mar/2024:13:34:56 +0100]");
     }
 }

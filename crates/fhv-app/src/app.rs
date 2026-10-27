@@ -119,6 +119,7 @@ pub struct App {
     cache_dir: PathBuf,
     error: Option<String>,
     filter_edit: Option<FilterEdit>,
+    pub(crate) datefmt: Option<crate::datefmt::DateFmtDlg>,
     pub(crate) columns_dlg: bool,
     export_dlg: Option<ExportDlg>,
     goto: Option<String>,
@@ -166,6 +167,7 @@ impl App {
             cache_dir,
             error: None,
             filter_edit: None,
+            datefmt: None,
             columns_dlg: false,
             export_dlg: None,
             goto: None,
@@ -410,6 +412,14 @@ impl App {
             .get(&t.path.to_string_lossy().into_owned())
             .copied()
             .unwrap_or_default();
+        if let Some(v) = self
+            .settings
+            .date_formats
+            .get(&t.path.to_string_lossy().into_owned())
+        {
+            t.apply_kind_specs(v);
+            t.formats_changed = false;
+        }
     }
 
     /// Reopens tab `i` with the given header / delimiter (state of the old
@@ -1127,7 +1137,7 @@ impl App {
                                         .desired_rows(1)
                                         .desired_width(f32::INFINITY),
                                 );
-                                if let (Some(_), false) = (&kinds, self.tz.is_utc())
+                                if kinds.is_some()
                                     && i < t.table.columns.len()
                                     && let fhv_engine::columns::Kind::Time(o) = t.kind(i)
                                     && let Some(c) = self.tz.convert(v, o)
@@ -1201,19 +1211,11 @@ impl App {
         let mut quick_edits: Vec<(usize, String)> = Vec::new();
         let open_editor: std::cell::Cell<Option<usize>> = std::cell::Cell::new(None);
         let mut header_action: Option<HeaderAction> = None;
+        let mut open_datefmt: Option<usize> = None;
         let mut cell_action: Option<CellAction> = None;
         let filters: Vec<ColFilter> = t.filters.clone();
         let col_kinds: Vec<fhv_engine::columns::Kind> =
             (0..t.table.columns.len()).map(|c| t.kind(c)).collect();
-        let col_overrides: std::collections::HashMap<usize, fhv_engine::time::Order> = t
-            .engine
-            .kind_overrides()
-            .into_iter()
-            .filter_map(|(c, k)| match k {
-                fhv_engine::columns::Kind::Time(o) => Some((c, o)),
-                _ => None,
-            })
-            .collect();
         let utc_cols: Vec<bool> = (0..t.table.columns.len())
             .map(|c| utc_text_note(t, c))
             .collect();
@@ -1301,21 +1303,23 @@ impl App {
                     header_action = Some(HeaderAction::CopyColumn(c));
                     ui.close();
                 }
-                if !matches!(col_kinds[c], fhv_engine::columns::Kind::Number) {
-                    use fhv_engine::time::Order;
-                    ui.separator();
-                    ui.label("Dates written d/M or M/d (year last):");
-                    let cur = col_overrides.get(&c).copied();
-                    for (label, o) in [
-                        ("as detected", None),
-                        ("day first (31/12/2024)", Some(Order::Dmy)),
-                        ("month first (12/31/2024)", Some(Order::Mdy)),
-                    ] {
-                        if ui.selectable_label(cur == o, label).clicked() {
-                            header_action = Some(HeaderAction::DateOrder(c, o));
-                            ui.close();
-                        }
+                ui.separator();
+                match col_kinds[c] {
+                    fhv_engine::columns::Kind::Time(f) => {
+                        let text = RichText::new(format!("Dates: {}", f.describe())).weak();
+                        ui.label(if f.year_assumed() {
+                            text.color(ui.visuals().warn_fg_color)
+                        } else {
+                            text
+                        });
                     }
+                    _ => {
+                        ui.label(RichText::new("Not read as dates").weak());
+                    }
+                }
+                if ui.button("Date format…").clicked() {
+                    header_action = Some(HeaderAction::DateFormat(c));
+                    ui.close();
                 }
             };
             let mut cell_menu = |ui: &mut Ui, row: u64, dc: usize| {
@@ -1433,7 +1437,7 @@ impl App {
                 HeaderAction::Hide(c) => t.order.retain(|&x| x != c),
                 HeaderAction::Freeze(n) => t.grid.frozen = n,
                 HeaderAction::CopyColumn(c) => t.start_copy_column(c),
-                HeaderAction::DateOrder(c, o) => t.set_date_order(c, o),
+                HeaderAction::DateFormat(c) => open_datefmt = Some(c),
             }
         }
         if let Some(a) = cell_action {
@@ -1484,6 +1488,30 @@ impl App {
         }
         if let Some(c) = open_editor.get() {
             self.open_filter_editor(c);
+        }
+        if let Some(c) = open_datefmt {
+            self.open_date_format(c);
+        }
+    }
+
+    pub(crate) fn open_date_format(&mut self, c: usize) {
+        let Some(t) = self.tabs.get(self.active) else {
+            return;
+        };
+        if c < t.table.columns.len() {
+            self.datefmt = Some(crate::datefmt::DateFmtDlg::new(t, c));
+        }
+    }
+
+    fn date_format_dialog(&mut self, ctx: &egui::Context) {
+        let Some(d) = &mut self.datefmt else { return };
+        // Bound to one file, like the filter editor.
+        let Some(t) = self.tabs.get_mut(self.active).filter(|t| t.path == d.path) else {
+            self.datefmt = None;
+            return;
+        };
+        if !crate::datefmt::show(d, t, ctx) {
+            self.datefmt = None;
         }
     }
 
@@ -2079,7 +2107,7 @@ impl App {
 
 enum HeaderAction {
     Sort(usize, bool),
-    DateOrder(usize, Option<fhv_engine::time::Order>),
+    DateFormat(usize),
     Hide(usize),
     Freeze(usize),
     CopyColumn(usize),
@@ -2130,10 +2158,12 @@ pub fn forhunt_show_command_for_test(
 
 /// Column `c` is a time column shown in a zone other than UTC: text
 /// matching on it sees the file's UTC values (D-038).
+/// Also true for a column shown as parsed times (epoch numbers, assumed
+/// zone or year, D-051): text matching sees the file's cells.
 fn utc_text_note(t: &Tab, c: usize) -> bool {
-    !t.tz_display().is_utc()
-        && t.table.column_index().is_some()
-        && matches!(t.kind(c), fhv_engine::columns::Kind::Time(_))
+    t.table.column_index().is_some()
+        && matches!(t.kind(c), fhv_engine::columns::Kind::Time(f)
+            if !t.tz_display().is_utc() || f.rewrites())
 }
 
 /// Chip note of a range condition on column `c`: the cells it cannot
@@ -2468,6 +2498,23 @@ impl eframe::App for App {
                 self.open_many(opened);
             }
         }
+        // Date formats set by the analyst: remembered per file (D-051).
+        let mut formats_saved = false;
+        for t in &mut self.tabs {
+            if std::mem::take(&mut t.formats_changed) {
+                let key = t.path.to_string_lossy().into_owned();
+                let specs = t.kind_specs();
+                if specs.is_empty() {
+                    self.settings.date_formats.remove(&key);
+                } else {
+                    self.settings.date_formats.insert(key, specs);
+                }
+                formats_saved = true;
+            }
+        }
+        if formats_saved {
+            self.settings.save();
+        }
         let tz = self.tz.name.clone();
         let mut running = self.poll_conversions();
         for t in &mut self.tabs {
@@ -2508,6 +2555,7 @@ impl eframe::App for App {
         }
         egui::CentralPanel::default().show(ui, |ui| self.grid(ui));
         self.filter_editor(&ctx);
+        self.date_format_dialog(&ctx);
         self.columns_window(&ctx);
         self.export_window(&ctx);
         self.small_dialogs(&ctx);

@@ -29,13 +29,37 @@ pub struct Session {
     #[serde(default)]
     pub bad_only: bool,
     pub tags: Vec<(u32, String)>,
-    /// Day/month order set on date columns (absent in 0.2.x sessions).
-    #[serde(default)]
+    /// Day/month order set on date columns by 0.3.x (read only: newer
+    /// sessions write `date_formats`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub date_orders: Vec<(String, fhv_engine::time::Order)>,
+    /// Date formats set on columns ([`kind_spec`]; absent before 0.4).
+    #[serde(default)]
+    pub date_formats: Vec<(String, String)>,
     /// Applied query terms the column filters cannot hold, as query text
     /// with explicit cs (absent before 0.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
+}
+
+/// A column kind set by the analyst as text: a date format spec
+/// (`time::Fmt::spec`), or `not-a-date` / `not-a-date:number`.
+pub fn kind_spec(k: fhv_engine::columns::Kind) -> String {
+    use fhv_engine::columns::Kind;
+    match k {
+        Kind::Time(f) => f.spec(),
+        Kind::Number => "not-a-date:number".into(),
+        Kind::Text => "not-a-date".into(),
+    }
+}
+
+pub fn kind_from_spec(s: &str) -> Option<fhv_engine::columns::Kind> {
+    use fhv_engine::columns::Kind;
+    match s {
+        "not-a-date" => Some(Kind::Text),
+        "not-a-date:number" => Some(Kind::Number),
+        s => fhv_engine::time::Fmt::from_spec(s).ok().map(Kind::Time),
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -89,15 +113,8 @@ pub fn capture(tab: &Tab) -> Session {
         tagged_only: tab.tagged_only,
         bad_only: tab.bad_only,
         tags: tab.tags.iter().map(|(r, n)| (*r, n.clone())).collect(),
-        date_orders: tab
-            .engine
-            .kind_overrides()
-            .into_iter()
-            .filter_map(|(c, k)| match k {
-                fhv_engine::columns::Kind::Time(o) => Some((name(c), o)),
-                _ => None,
-            })
-            .collect(),
+        date_orders: Vec::new(),
+        date_formats: tab.kind_specs(),
         query: (!tab.query.residual_text.is_empty()).then(|| tab.query.residual_text.clone()),
     }
 }
@@ -160,8 +177,11 @@ pub fn apply(tab: &mut Tab, s: &Session) -> Vec<String> {
     tab.bad_only = s.bad_only;
     for c in 0..tab.table.columns.len() {
         if tab.engine.kind_override(c).is_some() {
-            tab.set_date_order(c, None);
+            tab.set_kind(c, None);
         }
+    }
+    for n in tab.apply_kind_specs(&s.date_formats) {
+        warn.push(format!("column {n} not in this file (or its date format)"));
     }
     for (n, o) in &s.date_orders {
         match tab.table.columns.iter().position(|c| c == n) {

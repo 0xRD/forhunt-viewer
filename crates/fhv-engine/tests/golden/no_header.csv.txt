@@ -6,7 +6,7 @@ crlf: false
 columns (3): ["Column 1", "Column 2", "Column 3"]
 rows: 3
 structural_bad: []
-kinds: Number+dict(3), Time(Ymd)+dict(3)+ticks, Text+dict(3)
+kinds: Number+dict(3), Time(text)+dict(3)+ticks, Text+dict(3)
 primary_time: Some(1)
 ragged: []
 row 0 (3 fields): "1", "2024-03-11 10:00:00", "x"

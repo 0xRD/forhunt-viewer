@@ -277,3 +277,28 @@ asserts at most 2 frames. Before the fix it fails.
 
 Not measured: Linux and Windows (no machine here); the fix is not
 platform-specific.
+
+## Date detection (2026-10-27, issue #10)
+
+Machine M2, release builds of master (fec066d, before) and the issue #10
+branch (after), `fhv-bench index FILE --no-cache`, before and after
+interleaved, 5 runs each, warm page cache; files from `csv-gen gen --seed 1`:
+`--layout forhunt --size 500M` (704 512 rows), `--layout generic --size 300M`
+(4 489 216 rows), `--layout dates --size 300M` (983 040 rows, 15 date
+columns). `rows_ready_s` includes the column profile (20 k sampled rows,
+D-015); `columns_s` is the full column pass. Typical values:
+
+| File | first rows ms (before / after) | rows ready s (before / after) | column pass s (before / after) |
+|---|---:|---:|---:|
+| forhunt 500 MB | 7.0 / 6.7 | 0.071 / 0.084 | 0.069 / 0.069 |
+| generic 300 MB | 9.3 / 9.1 | 0.063 / 0.066 | 0.094 / 0.097 |
+| dates 300 MB | 5.0 / 5.0 | 0.045 / 0.060 | 0.026 / 0.027 |
+
+The profile costs 3-15 ms more (more shapes tried per sampled cell, epoch
+ranges on numeric cells); it is bounded by the sample, so it is the same on
+5 GB. The full pass (one parse per row of the primary time column, ISO tried
+first) and the first screen are unchanged. The 5 GB acceptance corpora were
+not re-measured for this change. A first version cost 35 ms on the forhunt
+file; parsing a number once for all epoch units, retrying day-first only for
+cells starting with a digit, and rejecting words longer than any month name
+brought it to the figures above.

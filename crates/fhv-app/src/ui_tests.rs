@@ -857,10 +857,10 @@ fn date_order_override_and_excluded_cells_on_chips() {
     let s2: crate::session::Session = serde_json::from_str(&json).unwrap();
     h.state_mut().tabs[0].set_date_order(1, None);
     crate::session::apply(&mut h.state_mut().tabs[0], &s2);
-    assert_eq!(
+    assert!(matches!(
         h.state().tabs[0].kind(1),
-        fhv_engine::columns::Kind::Time(fhv_engine::time::Order::Dmy)
-    );
+        fhv_engine::columns::Kind::Time(f) if f.order == fhv_engine::time::Order::Dmy
+    ));
     run(&mut h);
     assert_eq!(h.state().tabs[0].view.len(), 24);
 }
@@ -1268,4 +1268,82 @@ fn query_bar_completes_with_tab() {
     h.key_press(egui::Key::Enter);
     h.run_steps(2);
     wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 667);
+}
+
+/// Epoch numbers and year-less syslog dates are detected; the grid shows
+/// the parsed times; "Date format…" sets a custom format with a live
+/// preview, remembered per file (settings) and in sessions (D-051).
+#[test]
+fn date_formats_detected_shown_and_set_by_hand() {
+    use fhv_engine::columns::Kind;
+    use fhv_engine::time::Shape;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("formats.csv");
+    let mut s = String::from("When,Epoch,Sys,Custom\n");
+    for i in 0..100u32 {
+        s.push_str(&format!(
+            "2024-03-01 12:00:{:02},{},Mar  1 12:00:{:02},12h00m{:02} le 01|03|2024\n",
+            i % 60,
+            1_709_294_400 + i,
+            i % 60,
+            i % 60
+        ));
+    }
+    std::fs::write(&file, s).unwrap();
+    let mut h = harness(dir.path(), &file);
+    wait(&mut h, idle);
+    let t = &h.state().tabs[0];
+    assert!(matches!(t.kind(1), Kind::Time(f) if f.shape == Shape::EpochS));
+    assert!(matches!(t.kind(2), Kind::Time(f) if f.year_assumed()));
+    assert_eq!(t.kind(3), Kind::Text);
+    // The epoch column shows times, the ISO one as written.
+    h.run_steps(2);
+    let t = &h.state().tabs[0];
+    assert_eq!(t.rows.cell(0, 1), "2024-03-01 12:00:00.0000000");
+    assert_eq!(t.rows.cell(0, 0), "2024-03-01 12:00:00");
+
+    h.state_mut().open_date_format(3);
+    h.run_steps(2);
+    h.get_by_label_contains("Read as text / numbers");
+    {
+        let d = h.state_mut().datefmt.as_mut().unwrap();
+        d.mode = crate::datefmt::Mode::Custom;
+        d.pattern = "%Hh%Mm%S le %d|%m|%Y".into();
+    }
+    h.run_steps(2);
+    h.get_by_label("Preview of the first 20 values: 0 not dates");
+    h.get_by_label("Apply format").click();
+    h.run_steps(2);
+    assert!(h.state().datefmt.is_none());
+    assert!(matches!(
+        h.state().tabs[0].kind(3),
+        Kind::Time(f) if matches!(f.shape, Shape::Custom(_))
+    ));
+    let key = file.to_string_lossy().into_owned();
+    let saved = h.state().settings.date_formats.get(&key).cloned().unwrap();
+    assert_eq!(
+        saved,
+        vec![(
+            "Custom".to_string(),
+            "custom;pattern=%Hh%Mm%S le %d|%m|%Y".to_string()
+        )]
+    );
+    // Range filter on the custom column.
+    let t = &mut h.state_mut().tabs[0];
+    t.filters[3].conds = vec![Op::Between(
+        "2024-03-01 12:00:00".into(),
+        "2024-03-01 12:00:09".into(),
+    )];
+    t.requery();
+    wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 20);
+    // Session round trip.
+    let json = serde_json::to_string(&crate::session::capture(&h.state().tabs[0])).unwrap();
+    let s2: crate::session::Session = serde_json::from_str(&json).unwrap();
+    h.state_mut().tabs[0].set_kind(3, None);
+    assert_eq!(h.state().tabs[0].kind(3), Kind::Text);
+    crate::session::apply(&mut h.state_mut().tabs[0], &s2);
+    assert!(matches!(
+        h.state().tabs[0].kind(3),
+        Kind::Time(f) if matches!(f.shape, Shape::Custom(_))
+    ));
 }

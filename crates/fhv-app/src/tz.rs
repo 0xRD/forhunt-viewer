@@ -2,7 +2,9 @@
 //! forensic tools); only the grid and detail pane show converted times.
 
 use fhv_engine::filter::Op;
-use fhv_engine::time::{self, Order, TICKS_PER_SEC};
+#[cfg(test)]
+use fhv_engine::time::Order;
+use fhv_engine::time::{self, Fmt, TICKS_PER_SEC};
 
 #[derive(Clone)]
 pub struct Display {
@@ -50,10 +52,16 @@ impl Display {
         self.tz.is_none()
     }
 
-    /// The cell converted to the display zone, or `None` to show it as is.
-    pub fn convert(&self, cell: &str, order: Order) -> Option<String> {
-        let tz = self.tz.as_ref()?;
-        let ticks = time::parse(cell.as_bytes(), order)?;
+    /// The cell converted to the display zone, or `None` to show it as is
+    /// (UTC display of a column whose text is the instant as written).
+    /// Columns whose cells are numbers, or read with an assumed zone or
+    /// year, always show the parsed time (D-051).
+    pub fn convert(&self, cell: &str, f: impl Into<Fmt>) -> Option<String> {
+        let f = f.into();
+        let ticks = time::parse(cell.as_bytes(), f)?;
+        let Some(tz) = self.tz.as_ref() else {
+            return f.rewrites().then(|| time::format(ticks, 0));
+        };
         let secs = ticks.div_euclid(TICKS_PER_SEC);
         let ts = jiff::Timestamp::from_second(secs).ok()?;
         let off = tz.to_offset(ts).seconds();
@@ -74,12 +82,13 @@ impl Display {
     /// day in this zone is 23 or 25 hours across a DST change. A wall-clock
     /// time that happens twice (or not at all) widens the range rather
     /// than narrowing it. Other operators and UTC display: unchanged.
-    pub fn op_to_utc(&self, op: &Op, order: Order) -> Op {
+    pub fn op_to_utc(&self, op: &Op, f: impl Into<Fmt>) -> Op {
+        let f = f.into();
         let Some(tz) = &self.tz else {
             return op.clone();
         };
         let conv = |v: &String, upper: bool| -> String {
-            let Some((wall, span, zoned)) = time::parse_zoned(v.as_bytes(), order) else {
+            let Some((wall, span, zoned)) = time::parse_operand(v.as_bytes(), f) else {
                 return v.clone();
             };
             if zoned {
@@ -114,7 +123,7 @@ impl Display {
             Op::Lt(v) => Op::Lt(conv(v, false)),
             Op::Le(v) => Op::Le(conv(v, true)),
             Op::Between(a, b) => Op::Between(conv(a, false), conv(b, true)),
-            Op::Not(x) => Op::Not(Box::new(self.op_to_utc(x, order))),
+            Op::Not(x) => Op::Not(Box::new(self.op_to_utc(x, f))),
             other => other.clone(),
         }
     }
@@ -142,6 +151,16 @@ mod tests {
                 .is_none()
         );
         assert!(Display::new("Not/AZone").is_utc());
+        // Epoch numbers show as times, in UTC too.
+        let epoch = Fmt::shape(fhv_engine::time::Shape::EpochS);
+        assert_eq!(
+            Display::new("UTC").convert("1709251200", epoch).as_deref(),
+            Some("2024-03-01 00:00:00.0000000")
+        );
+        assert_eq!(
+            d.convert("1709251200", epoch).as_deref(),
+            Some("2024-03-01 01:00:00.0000000 +01:00")
+        );
     }
 
     #[test]
