@@ -11,7 +11,7 @@ use crate::grid::{self, Callbacks, Style};
 use crate::session;
 use crate::settings::RowNumMode;
 use crate::settings::{Settings, dirs};
-use crate::tab::{ColFilter, DC_FIRST, DC_NUM, DC_TAG, Tab};
+use crate::tab::{ColFilter, DC_FIRST, DC_TAG, Tab};
 use crate::tz;
 
 /// Index caches and converted copies above this are evicted at start-up.
@@ -108,6 +108,8 @@ struct FilterEdit {
 
 struct ExportDlg {
     tagged: bool,
+    /// The selected rows / cells (D-061).
+    selection: bool,
     jsonl: bool,
 }
 
@@ -135,6 +137,11 @@ pub struct App {
     /// Fields of the row shown in the detail pane (read once per row, not
     /// per frame): (file, data row, raw values, displayed values).
     detail: Option<(PathBuf, u32, Vec<String>, Vec<String>)>,
+    /// Field picked in the detail pane for a column hidden in the grid,
+    /// with the active cell it was picked at.
+    detail_pick: Option<((Option<u64>, usize), usize)>,
+    /// Highlighted field of the detail pane: (data row, file column).
+    pub(crate) detail_hl: Option<(u32, usize)>,
     /// Hidden scroll benchmark (env FHV_BENCH_SCROLL=frames): frame times.
     bench: Option<(usize, Vec<f64>, Vec<f64>)>,
     /// Hidden frame counter (env FHV_FPS): frames per second on stderr.
@@ -178,6 +185,8 @@ impl App {
             help: false,
             focus_search: false,
             detail: None,
+            detail_pick: None,
+            detail_hl: None,
             bench: std::env::var("FHV_BENCH_SCROLL")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -368,7 +377,8 @@ impl App {
                 i.key_pressed(Key::Escape),
             )
         });
-        let typing = ctx.memory(|m| m.focused().is_some()) && ctx.egui_wants_keyboard_input();
+        // The grid takes focus when clicked: only a text field means typing.
+        let typing = ctx.text_edit_focused();
         if open {
             self.open_dialog();
         }
@@ -384,11 +394,14 @@ impl App {
         if copy_row && let Some(t) = self.tab() {
             copy_selected_row(ctx, t, false);
         }
+        let (fmt, delim) = (self.settings.copy_format, self.settings.copy_csv_delim);
         if copy
+            && !copy_row
             && !typing
             && let Some(t) = self.tab()
+            && let Some(text) = crate::copyfmt::copy(t, None, fmt, delim, None)
         {
-            copy_selected_cell(ctx, t);
+            ctx.copy_text(text);
         }
         if (f3 || sf3)
             && let Some(t) = self.tab()
@@ -500,6 +513,7 @@ impl App {
                     ui.close();
                     self.export_dlg = Some(ExportDlg {
                         tagged: false,
+                        selection: false,
                         jsonl: false,
                     });
                 }
@@ -994,6 +1008,12 @@ impl App {
                         fmt_n(r as u64 + 1)
                     ));
             }
+            if let Some(sel) = crate::copyfmt::summary(t) {
+                ui.separator();
+                ui.label(sel).on_hover_text(
+                    "Ctrl+C copies this selection (the last one used: cells or rows)",
+                );
+            }
             ui.separator();
             if let Some((what, frac)) = t.progress_text() {
                 if frac >= 0.0 {
@@ -1108,6 +1128,16 @@ impl App {
             ui.label(RichText::new(format!("note: {note}")).italics());
         }
         let kinds = t.table.column_index();
+        // The field of the active cell, or the one picked here (D-062).
+        let at = (t.grid.selected, t.grid.selected_col);
+        let hl = match self.detail_pick {
+            Some((k, f)) if k == at => Some(f),
+            _ => t.file_col(t.grid.selected_col),
+        };
+        let reveal = self.detail_hl != hl.map(|f| (row, f));
+        self.detail_hl = hl.map(|f| (row, f));
+        let dh = crate::theme::current(ui.ctx()).detail_highlight;
+        let mut picked = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
@@ -1122,21 +1152,34 @@ impl App {
                                 .get(i)
                                 .cloned()
                                 .unwrap_or_else(|| format!("(extra field {})", i + 1));
-                            let r = ui.label(RichText::new(name).strong());
+                            let here = hl == Some(i);
+                            let bg = ui.painter().add(egui::Shape::Noop);
+                            let mut name = RichText::new(name).strong();
+                            if here {
+                                name = name.color(dh.fg.0);
+                            }
+                            let r = ui
+                                .add(egui::Label::new(name).sense(egui::Sense::click()))
+                                .on_hover_text("click: select this cell in the grid");
+                            if r.clicked() {
+                                picked = Some(i);
+                            }
                             r.context_menu(|ui| {
                                 if ui.button("Copy value").clicked() {
                                     ui.ctx().copy_text(v.clone());
                                     ui.close();
                                 }
                             });
-                            ui.vertical(|ui| {
+                            let vr = ui.vertical(|ui| {
                                 let mut text = shown_all[i].as_str();
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut text)
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_rows(1)
-                                        .desired_width(f32::INFINITY),
-                                );
+                                let mut te = egui::TextEdit::multiline(&mut text)
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_rows(1)
+                                    .desired_width(f32::INFINITY);
+                                if here {
+                                    te = te.background_color(dh.bg.0).text_color(dh.fg.0);
+                                }
+                                ui.add(te);
                                 if kinds.is_some()
                                     && i < t.table.columns.len()
                                     && let fhv_engine::columns::Kind::Time(o) = t.kind(i)
@@ -1147,10 +1190,28 @@ impl App {
                                     );
                                 }
                             });
+                            if here {
+                                let rect = r.rect.union(vr.response.rect).expand(2.0);
+                                ui.painter()
+                                    .set(bg, egui::Shape::rect_filled(rect, 3.0, dh.bg.0));
+                                if reveal {
+                                    r.scroll_to_me(Some(egui::Align::Center));
+                                }
+                            }
                             ui.end_row();
                         }
                     });
             });
+        if let Some(f) = picked {
+            match t.order.iter().position(|&c| c == f) {
+                Some(i) => {
+                    self.detail_pick = None;
+                    t.grid.selected_col = DC_FIRST + i;
+                    grid::reveal(&mut t.grid, DC_FIRST + i);
+                }
+                None => self.detail_pick = Some((at, f)),
+            }
+        }
     }
 
     fn grid(&mut self, ui: &mut Ui) {
@@ -1334,11 +1395,33 @@ impl App {
                     ui.close();
                 }
             };
+            let rows_mode = t.grid.rows_active && !t.grid.rows.set.is_empty();
             let mut cell_menu = |ui: &mut Ui, row: u64, dc: usize| {
-                if ui.button("Copy cell   Ctrl+C").clicked() {
-                    cell_action = Some(CellAction::CopyCell(row, dc));
+                if ui.button("Copy   Ctrl+C").clicked() {
+                    cell_action = Some(CellAction::Copy(None, None));
                     ui.close();
                 }
+                if ui.button("Copy with headers").clicked() {
+                    cell_action = Some(CellAction::Copy(None, Some(true)));
+                    ui.close();
+                }
+                ui.menu_button("Copy as", |ui| {
+                    for f in crate::copyfmt::Format::ALL {
+                        if ui.button(f.label()).clicked() {
+                            cell_action = Some(CellAction::Copy(Some(f), None));
+                            ui.close();
+                        }
+                    }
+                });
+                if rows_mode && ui.button("Tag selected rows").clicked() {
+                    cell_action = Some(CellAction::TagSelected);
+                    ui.close();
+                }
+                if ui.button("Export selection…").clicked() {
+                    cell_action = Some(CellAction::ExportSelection);
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Copy row as JSON   Ctrl+Shift+C").clicked() {
                     cell_action = Some(CellAction::CopyRow(row, false));
                     ui.close();
@@ -1470,10 +1553,22 @@ impl App {
         }
         if let Some(a) = cell_action {
             match a {
-                CellAction::CopyCell(row, dc) => {
-                    t.grid.selected = Some(row);
-                    t.grid.selected_col = dc;
-                    copy_selected_cell(ui.ctx(), t);
+                CellAction::Copy(fmt, headers) => {
+                    let (def, delim) = (self.settings.copy_format, self.settings.copy_csv_delim);
+                    if let Some(text) = crate::copyfmt::copy(t, fmt, def, delim, headers) {
+                        ui.ctx().copy_text(text);
+                    }
+                }
+                CellAction::TagSelected => {
+                    let rows = t.grid.rows.set.ranges().to_vec();
+                    t.tag_positions(&rows);
+                }
+                CellAction::ExportSelection => {
+                    self.export_dlg = Some(ExportDlg {
+                        tagged: false,
+                        selection: true,
+                        jsonl: false,
+                    });
                 }
                 CellAction::CopyRow(row, tsv) => {
                     t.grid.selected = Some(row);
@@ -1834,12 +1929,16 @@ impl App {
         egui::Window::new("Export rows")
             .open(&mut open)
             .show(ctx, |ui| {
+                let mut which = (dlg.tagged, dlg.selection);
                 ui.radio_value(
-                    &mut dlg.tagged,
-                    false,
+                    &mut which,
+                    (false, false),
                     "Rows in the current view (filter + sort)",
                 );
-                ui.radio_value(&mut dlg.tagged, true, "Tagged rows only");
+                ui.radio_value(&mut which, (true, false), "Tagged rows only");
+                ui.radio_value(&mut which, (false, true), "Selection")
+                    .on_hover_text("the selected rows, or the rows and columns of the selected cells");
+                (dlg.tagged, dlg.selection) = which;
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut dlg.jsonl, false, "CSV");
                     ui.radio_value(&mut dlg.jsonl, true, "JSONL");
@@ -1853,7 +1952,7 @@ impl App {
                 go = ui.button("Export…").clicked();
             });
         if go {
-            let (tagged, jsonl) = (dlg.tagged, dlg.jsonl);
+            let (tagged, selection, jsonl) = (dlg.tagged, dlg.selection, dlg.jsonl);
             self.export_dlg = None;
             let Some(t) = self.tabs.get_mut(self.active) else {
                 return;
@@ -1876,13 +1975,18 @@ impl App {
                 let Some(t) = self.tabs.get_mut(self.active) else {
                     return;
                 };
-                let cols = t.order.clone();
-                t.start_export(
-                    p,
-                    tagged,
-                    cols,
-                    if jsonl { Format::Jsonl } else { Format::Csv },
-                );
+                let fmt = if jsonl { Format::Jsonl } else { Format::Csv };
+                if selection {
+                    match crate::copyfmt::selection_rows(t) {
+                        Some((rows, cols)) if !cols.is_empty() => {
+                            t.start_export_positions(p, rows, cols, fmt)
+                        }
+                        _ => t.status = Some("not exported: nothing selected".into()),
+                    }
+                } else {
+                    let cols = t.order.clone();
+                    t.start_export(p, tagged, cols, fmt);
+                }
             }
         } else if !open {
             self.export_dlg = None;
@@ -2017,7 +2121,18 @@ impl App {
                             ("Ctrl+G", "go to row"),
                             ("Arrows, PgUp/PgDn", "move selection"),
                             ("Ctrl+Home / Ctrl+End", "first / last row"),
-                            ("Ctrl+C", "copy cell"),
+                            ("Click / drag", "select a cell / a range of cells"),
+                            ("Shift+click, Shift+arrows", "extend the range"),
+                            ("Ctrl+click / Ctrl+drag", "add or remove cells and ranges"),
+                            ("Ctrl+A", "select all cells"),
+                            (
+                                "Row gutter (left edge)",
+                                "select rows: click, Shift, Ctrl, drag",
+                            ),
+                            (
+                                "Ctrl+C",
+                                "copy the selection (default format: TSV; right-click: Copy as)",
+                            ),
                             (
                                 "Ctrl+Shift+C",
                                 "copy row as JSON (right-click: tab-separated)",
@@ -2142,7 +2257,10 @@ enum HeaderAction {
 }
 
 enum CellAction {
-    CopyCell(u64, usize),
+    /// The selection: format (None: the default), headers (None: default).
+    Copy(Option<crate::copyfmt::Format>, Option<bool>),
+    TagSelected,
+    ExportSelection,
     /// Row, as tab-separated text (else indented JSON).
     CopyRow(u64, bool),
     Tag(u64),
@@ -2356,22 +2474,6 @@ fn row_tsv(t: &Tab, fields: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\t")
-}
-
-fn copy_selected_cell(ctx: &egui::Context, t: &mut Tab) {
-    let Some(r) = t.grid.selected.and_then(|p| t.view.row_at(p)) else {
-        return;
-    };
-    let dc = t.grid.selected_col;
-    let text = match dc {
-        DC_TAG => t.tags.get(&r).cloned().unwrap_or_default(),
-        DC_NUM => (r as u64 + 1).to_string(),
-        _ => match (t.file_col(dc), t.table.row_fields(r as u64)) {
-            (Some(c), Ok(f)) => f.get(c).cloned().unwrap_or_default(),
-            _ => return,
-        },
-    };
-    ctx.copy_text(text);
 }
 
 fn copy_selected_row(ctx: &egui::Context, t: &mut Tab, tsv: bool) {

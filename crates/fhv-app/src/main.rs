@@ -12,12 +12,14 @@ mod appearance;
 mod autosize;
 mod colorder;
 mod convert;
+mod copyfmt;
 mod datefmt;
 mod fonts;
 mod grid;
 #[cfg(target_os = "macos")]
 mod macos;
 mod querybar;
+mod selection;
 mod session;
 mod settings;
 mod tab;
@@ -29,6 +31,8 @@ mod ui_tests;
 mod ui_tests_appearance;
 #[cfg(test)]
 mod ui_tests_columns;
+#[cfg(test)]
+mod ui_tests_selection;
 
 use std::path::PathBuf;
 

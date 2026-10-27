@@ -263,6 +263,24 @@ impl State {
                     }
                 });
                 ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Ctrl+C copies the selection as");
+                    let before = (s.copy_format, s.copy_csv_delim);
+                    egui::ComboBox::from_id_salt("copy_format")
+                        .selected_text(s.copy_format.label())
+                        .show_ui(ui, |ui| {
+                            for f in crate::copyfmt::Format::ALL {
+                                ui.selectable_value(&mut s.copy_format, f, f.label());
+                            }
+                        });
+                    ui.label("CSV delimiter");
+                    ui.radio_value(&mut s.copy_csv_delim, ',', ",");
+                    ui.radio_value(&mut s.copy_csv_delim, ';', ";");
+                    if before != (s.copy_format, s.copy_csv_delim) {
+                        s.save();
+                    }
+                });
+                ui.separator();
                 if ui
                     .button("Reset to default")
                     .on_hover_text("Dark theme, JetBrains Mono 12.5 pt, UI scale 100 %")

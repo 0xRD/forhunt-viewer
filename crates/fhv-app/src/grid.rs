@@ -11,9 +11,11 @@
 use std::ops::Range;
 
 use eframe::egui::{
-    Align2, Color32, CursorIcon, FontId, Id, Key, Modifiers, Pos2, Rect, Response, Sense, Stroke,
-    StrokeKind, Ui, pos2, vec2,
+    Align2, Color32, CursorIcon, FontId, Id, Key, KeyboardShortcut, Modifiers, Pos2, Rect,
+    Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2,
 };
+
+use crate::selection::{CellSel, RowSel};
 
 /// Rows the grid displays. Row indices are display positions (after filter
 /// and sort), columns are display columns; mapping them to file rows and
@@ -63,7 +65,39 @@ pub struct GridState {
     pub col_x: Vec<(f32, f32)>,
     pub header_y: f32,
     drag_thumb: Option<(f32, f64)>,
+    /// Selected cells (their active cell is `selected` / `selected_col`)
+    /// and rows (row gutter), in display positions (D-060).
+    pub cells: CellSel,
+    pub rows: RowSel,
+    /// The row gutter was used last: copies take the rows.
+    pub rows_active: bool,
+    /// Column order the ranges were made in (the tab clears them when it
+    /// changes).
+    pub sel_cols: Vec<usize>,
+    drag: Option<Drag>,
     hdr_drag: Option<HdrDrag>,
+}
+
+/// Selection drag: over the row gutter or the cells, from which cell, and
+/// whether the pointer left it.
+#[derive(Clone, Copy)]
+struct Drag {
+    rows: bool,
+    from: (u64, usize),
+    moved: bool,
+}
+
+impl GridState {
+    /// Drops the ranges and row selection, keeping the active cell.
+    pub fn clear_ranges(&mut self) {
+        self.rows.clear();
+        self.rows_active = false;
+        self.drag = None;
+        match self.selected {
+            Some(r) => self.cells.set((r, self.selected_col)),
+            None => self.cells.clear(),
+        }
+    }
 }
 
 /// A header press that may turn into a column drag.
@@ -94,6 +128,11 @@ impl Default for GridState {
             col_x: Vec::new(),
             header_y: 0.0,
             drag_thumb: None,
+            cells: CellSel::default(),
+            rows: RowSel::default(),
+            rows_active: false,
+            sel_cols: Vec::new(),
+            drag: None,
             hdr_drag: None,
         }
     }
@@ -107,6 +146,8 @@ pub struct Style {
     pub font: FontId,
     pub pad: f32,
     pub scrollbar_w: f32,
+    /// Row selector gutter at the left of the rows.
+    pub gutter_w: f32,
 }
 
 impl Default for Style {
@@ -118,6 +159,7 @@ impl Default for Style {
             font: FontId::monospace(12.5),
             pad: 5.0,
             scrollbar_w: 12.0,
+            gutter_w: 10.0,
         }
     }
 }
@@ -245,6 +287,13 @@ pub fn show(
     }
     state.selected_col = state.selected_col.min(ncols.saturating_sub(1));
     let n = src.row_count();
+    // The active cell moved from outside (search, go to row): one cell.
+    if state.cells.anchor != state.selected.map(|r| (r, state.selected_col)) {
+        match state.selected {
+            Some(r) => state.cells.set((r, state.selected_col)),
+            None => state.cells.clear(),
+        }
+    }
     let full = ui.available_rect_before_wrap();
     let outer = ui.allocate_rect(full, Sense::click_and_drag());
     let visuals = ui.visuals().clone();
@@ -252,9 +301,10 @@ pub fn show(
 
     let top_h = st.header_h + st.filter_h;
     let body = Rect::from_min_max(
-        pos2(full.min.x, full.min.y + top_h),
+        pos2(full.min.x + st.gutter_w, full.min.y + top_h),
         pos2(full.max.x - st.scrollbar_w, full.max.y),
     );
+    let gutter = Rect::from_min_max(pos2(full.min.x, body.min.y), pos2(body.min.x, body.max.y));
     let page = ((body.height() / st.row_h).floor() as u64).max(1);
     state.page_rows = page;
     state.body = body;
@@ -280,7 +330,17 @@ pub fn show(
         .ctx()
         .memory(|m| m.focused().is_some_and(|f| f != outer.id));
     if !typing {
-        let (scroll, keys) = ui.input(|i| {
+        let all = ui
+            .input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::A)));
+        if all && n > 0 {
+            state.cells.select_all(n, ncols);
+            state.rows_active = false;
+            if let Some((r, c)) = state.cells.anchor {
+                resp.selection_changed |= state.selected != Some(r);
+                (state.selected, state.selected_col) = (Some(r), c);
+            }
+        }
+        let (scroll, keys, shift) = ui.input(|i| {
             (
                 i.smooth_scroll_delta,
                 [
@@ -293,6 +353,7 @@ pub fn show(
                     i.key_pressed(Key::ArrowLeft),
                     i.key_pressed(Key::ArrowRight),
                 ],
+                i.modifiers.shift,
             )
         });
         if outer.hovered() {
@@ -301,7 +362,15 @@ pub fn show(
         }
         let [down, up, pgdn, pgup, home, end, left, right] = keys;
         let last = n as i64 - 1;
-        let mut sel = state.selected.map(|s| s as i64);
+        // Shift moves the far corner of the range, else the active cell.
+        let from = if shift {
+            state.cells.focus()
+        } else {
+            state.selected.map(|r| (r, state.selected_col))
+        };
+        let from_col = from.map_or(state.selected_col, |p| p.1);
+        let mut col = from_col;
+        let mut sel = from.map(|p| p.0 as i64);
         let mut step = |d: i64| {
             sel = Some(match sel {
                 Some(s) => (s + d).clamp(0, last.max(0)),
@@ -329,26 +398,71 @@ pub fn show(
             }
         }
         // Hidden (zero-width) columns are skipped.
-        if left
-            && let Some(c) = (0..state.selected_col)
-                .rev()
-                .find(|&c| state.widths[c] > 0.0)
-        {
-            state.selected_col = c;
+        if left && let Some(c) = (0..col).rev().find(|&c| state.widths[c] > 0.0) {
+            col = c;
         }
-        if right && let Some(c) = (state.selected_col + 1..ncols).find(|&c| state.widths[c] > 0.0) {
-            state.selected_col = c;
+        if right && let Some(c) = (col + 1..ncols).find(|&c| state.widths[c] > 0.0) {
+            col = c;
         }
         let new = sel.map(|s| s as u64);
-        if new != state.selected {
-            state.selected = new;
-            resp.selection_changed = true;
-            if let Some(s) = new {
-                scroll_to(state, s);
+        match new {
+            Some(r) if new != from.map(|p| p.0) || col != from_col => {
+                if shift && state.selected.is_some() {
+                    state.cells.extend((r, col));
+                    state.rows_active = false;
+                } else {
+                    resp.selection_changed |= new != state.selected;
+                    (state.selected, state.selected_col) = (new, col);
+                    state.cells.set((r, col));
+                }
+                scroll_to(state, r);
             }
+            None => state.selected_col = col,
+            _ => {}
         }
         if left || right {
-            reveal_col(state, body);
+            reveal_col(state, body, col);
+        }
+    }
+
+    // Selection drags scroll when the pointer nears or leaves the edges.
+    let (pressed, down, mods, pointer, dt) = ui.input(|i| {
+        (
+            i.pointer.primary_pressed(),
+            i.pointer.primary_down(),
+            i.modifiers,
+            i.pointer.latest_pos(),
+            i.stable_dt.min(0.1),
+        )
+    });
+    if !down {
+        state.drag = None;
+    }
+    if let (Some(d), Some(p)) = (state.drag, pointer) {
+        const EDGE: f32 = 8.0;
+        let beyond = |v: f32, lo: f32, hi: f32| {
+            if v < lo + EDGE {
+                -(lo + EDGE - v)
+            } else if v > hi - EDGE {
+                v - (hi - EDGE)
+            } else {
+                0.0
+            }
+        };
+        let dy = beyond(p.y, body.min.y, body.max.y);
+        let dx = if d.rows {
+            0.0
+        } else {
+            beyond(p.x, body.min.x, body.max.x)
+        };
+        if dy != 0.0 {
+            state.top += (dy.signum() * (4.0 + dy.abs() * 0.8) * dt) as f64;
+        }
+        if dx != 0.0 {
+            state.scroll_x += dx.signum() * (200.0 + dx.abs() * 20.0) * dt;
+        }
+        if dx != 0.0 || dy != 0.0 {
+            ui.ctx().request_repaint();
         }
     }
 
@@ -403,6 +517,32 @@ pub fn show(
     // Header with resize handles, sort clicks and menus.
     let header = Rect::from_min_max(full.min, pos2(body.max.x, full.min.y + st.header_h));
     painter.rect_filled(header, 0.0, visuals.widgets.noninteractive.bg_fill);
+    let th = crate::theme::current(ui.ctx());
+    {
+        let hg = Rect::from_min_max(full.min, pos2(body.min.x, header.max.y));
+        let ha = ui
+            .interact(hg, id.with("select_all_rows"), Sense::click())
+            .on_hover_text("select / deselect all rows");
+        if ha.clicked() {
+            state.rows.toggle_all(n);
+            state.rows_active = true;
+        }
+        let bx = Rect::from_center_size(hg.center(), vec2(7.0, 7.0));
+        let some = !state.rows.set.is_empty();
+        if some && state.rows.set.len() == n {
+            painter.rect_filled(bx, 1.0, th.range_outline.0);
+        } else {
+            if some {
+                painter.rect_filled(bx.shrink(2.0), 0.0, th.range_outline.0);
+            }
+            painter.rect_stroke(
+                bx,
+                1.0,
+                Stroke::new(1.0, visuals.weak_text_color()),
+                StrokeKind::Inside,
+            );
+        }
+    }
     let sep = Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color);
     // Header drag in progress: threshold, Esc, drop. A drag that ends this
     // frame also suppresses the click it ends with.
@@ -512,6 +652,77 @@ pub fn show(
         }
     }
 
+    // Cell under a point; a press selects, a drag extends (D-060).
+    let row_at = |y: f32| (state.top + ((y - body.min.y) / st.row_h) as f64).floor() as u64;
+    let col_at = |x: f32| {
+        xs.iter().enumerate().position(|(c, &(x0, x1))| {
+            let r = clip_for(
+                c,
+                Rect::from_min_max(pos2(x0, body.min.y), pos2(x1, body.max.y)),
+            );
+            r.width() > 0.0 && x >= r.min.x && x < r.max.x
+        })
+    };
+    let hit = |p: Pos2| -> Option<(u64, usize)> {
+        if !body.contains(p) {
+            return None;
+        }
+        let row = row_at(p.y);
+        (row < n).then_some((row, col_at(p.x)?))
+    };
+    let gutter_resp = ui.interact(gutter, id.with("row_gutter"), Sense::click_and_drag());
+    if pressed && let Some(p) = pointer {
+        if outer.hovered()
+            && let Some(cell) = hit(p)
+        {
+            state.rows_active = false;
+            if mods.shift && state.selected.is_some() {
+                state.cells.extend(cell);
+            } else {
+                if mods.command {
+                    state.cells.toggle(cell);
+                } else {
+                    state.cells.set(cell);
+                }
+                resp.selection_changed |= state.selected != Some(cell.0);
+                (state.selected, state.selected_col) = (Some(cell.0), cell.1);
+            }
+            state.drag = Some(Drag {
+                rows: false,
+                from: cell,
+                moved: false,
+            });
+            outer.request_focus();
+            ui.ctx().request_repaint();
+        } else if gutter_resp.hovered() && gutter.contains(p) && row_at(p.y) < n {
+            let row = row_at(p.y);
+            state.rows.press(row, mods.command, mods.shift);
+            state.rows_active = true;
+            state.drag = Some(Drag {
+                rows: true,
+                from: (row, 0),
+                moved: false,
+            });
+            outer.request_focus();
+            ui.ctx().request_repaint();
+        }
+    } else if let (Some(d), Some(p), true) = (&mut state.drag, pointer, n > 0) {
+        let p = pos2(
+            p.x.clamp(body.min.x, body.max.x - 1.0),
+            p.y.clamp(body.min.y, body.max.y - 1.0),
+        );
+        let row = row_at(p.y).min(n - 1);
+        if d.rows {
+            state.rows.drag_to(row);
+        } else {
+            let col = col_at(p.x).unwrap_or(d.from.1);
+            if (row, col) != d.from || d.moved {
+                d.moved = true;
+                state.cells.extend((row, col));
+            }
+        }
+    }
+
     // Rows.
     let first = state.top.floor() as u64;
     let offset = (state.top - first as f64) as f32 * st.row_h;
@@ -521,15 +732,29 @@ pub fn show(
     let text_color = visuals.text_color();
     let stripe = visuals.faint_bg_color;
     let sel_fill = visuals.selection.bg_fill;
-    let th = crate::theme::current(ui.ctx());
     let hl_fill = th.search_hit.0;
     let grid_line = Stroke::new(1.0, th.grid_line.0);
     let needle = highlight;
+    let multi = state.cells.is_multi();
+    let (range_fill, range_line) = (th.range_fill.0, th.range_outline.0);
+    let gutter_p = painter.with_clip_rect(gutter);
+    let gutter_hover = gutter_resp.hover_pos().map(|p| row_at(p.y));
     for k in 0..count {
         let row = first + k;
         let y = body.min.y - offset + k as f32 * st.row_h;
         let rr = Rect::from_min_size(pos2(body.min.x, y), vec2(body.width(), st.row_h));
-        if state.selected == Some(row) {
+        let row_sel = state.rows.set.contains(row);
+        let gr = Rect::from_min_max(pos2(gutter.min.x, y), pos2(gutter.max.x, y + st.row_h));
+        if row_sel {
+            gutter_p.rect_filled(gr.shrink2(vec2(2.0, 0.5)), 1.0, range_line);
+        } else if gutter_hover == Some(row) {
+            gutter_p.rect_filled(
+                gr.shrink2(vec2(2.0, 0.5)),
+                1.0,
+                visuals.widgets.hovered.bg_fill,
+            );
+        }
+        if state.selected == Some(row) && !multi {
             body_p.rect_filled(rr, 0.0, sel_fill);
         } else if let Some(c) = src.row_color(row) {
             body_p.rect_filled(rr, 0.0, c);
@@ -541,6 +766,10 @@ pub fn show(
             let clip = clip_for(c, cell.shrink2(vec2(st.pad, 0.0)));
             if clip.width() <= 0.0 || clip.height() <= 0.0 {
                 continue;
+            }
+            // Selection over any cell background.
+            if row_sel || (multi && state.cells.contains((row, c))) {
+                body_p.rect_filled(clip_for(c, cell), 0.0, range_fill);
             }
             if state.selected == Some(row) && state.selected_col == c {
                 body_p.rect_stroke(
@@ -576,6 +805,28 @@ pub fn show(
                 }
             }
             p.galley(origin, galley, text_color);
+        }
+    }
+    // Outline of each range.
+    if multi {
+        let y_of = |r: u64| body.min.y + ((r as f64 - state.top) as f32) * st.row_h;
+        for b in state.cells.blocks() {
+            let (y0, y1) = (
+                y_of(b.r0).max(body.min.y - 2.0),
+                y_of(b.r1 + 1).min(body.max.y + 2.0),
+            );
+            if let (true, Some(&(x0, _)), Some(&(_, x1))) = (
+                y0 < body.max.y && y1 > body.min.y,
+                xs.get(b.c0),
+                xs.get(b.c1),
+            ) {
+                body_p.rect_stroke(
+                    Rect::from_min_max(pos2(x0, y0), pos2(x1, y1)),
+                    0.0,
+                    Stroke::new(1.5, range_line),
+                    StrokeKind::Inside,
+                );
+            }
         }
     }
     // Column separators over the body, and the frozen edge.
@@ -672,28 +923,21 @@ pub fn show(
         StrokeKind::Inside,
     );
 
-    // Clicks select a cell; right click selects and opens the cell menu.
-    let hit = |p: Pos2| -> Option<(u64, usize)> {
-        if !body.contains(p) {
-            return None;
-        }
-        let row = (state.top + ((p.y - body.min.y) / st.row_h) as f64).floor() as u64;
-        let col = xs.iter().enumerate().position(|(c, &(x0, x1))| {
-            let r = clip_for(c, Rect::from_min_max(pos2(x0, p.y), pos2(x1, p.y + 1.0)));
-            r.width() > 0.0 && p.x >= r.min.x && p.x < r.max.x
-        })?;
-        (row < n).then_some((row, col))
-    };
+    // A press selected already; a right click outside the selection
+    // selects its cell, then opens the cell menu.
     if (outer.clicked() || outer.double_clicked() || outer.secondary_clicked())
         && let Some(p) = outer.interact_pointer_pos()
         && let Some((row, col)) = hit(p)
     {
-        if state.selected != Some(row) {
-            resp.selection_changed = true;
+        if outer.secondary_clicked() && !(state.rows_active && state.rows.set.contains(row)) {
+            state.rows_active = false;
+            if !state.cells.contains((row, col)) {
+                state.cells.set((row, col));
+                resp.selection_changed |= state.selected != Some(row);
+                (state.selected, state.selected_col) = (Some(row), col);
+            }
         }
-        state.selected = Some(row);
-        state.selected_col = col;
-        if outer.clicked() {
+        if outer.clicked() && !mods.shift && !mods.command {
             resp.clicked_cell = Some((row, col));
         }
         if outer.double_clicked() {
@@ -759,9 +1003,14 @@ pub fn scroll_to(state: &mut GridState, row: u64) {
     }
 }
 
-/// Scrolls horizontally so the selected column is visible.
-fn reveal_col(state: &mut GridState, body: Rect) {
-    let c = state.selected_col;
+/// Scrolls horizontally so column `c` is visible (as of the last frame).
+pub fn reveal(state: &mut GridState, c: usize) {
+    let body = state.body;
+    reveal_col(state, body, c);
+}
+
+/// Scrolls horizontally so column `c` is visible.
+fn reveal_col(state: &mut GridState, body: Rect, c: usize) {
     if c < state.frozen || c >= state.widths.len() {
         return;
     }

@@ -115,6 +115,7 @@ impl ColFilter {
 pub enum JobKind {
     Query,
     CopyColumn,
+    CopyCells,
     Search,
     Export(PathBuf),
 }
@@ -201,6 +202,8 @@ pub struct Tab {
     /// Query bar text, and the part of the last applied query that the
     /// column filters cannot hold (D-045).
     pub query: crate::querybar::QueryState,
+    /// Status-bar count / sum of the cell selection it was computed for.
+    pub sel_stats: Option<(crate::selection::CellSel, Option<(u64, f64)>)>,
 }
 
 fn initial_width(name: &str) -> f32 {
@@ -303,6 +306,7 @@ impl Tab {
             rownum_mode: RowNumMode::Auto,
             query: Default::default(),
             clipboard: None,
+            sel_stats: None,
             bad: None,
             hits_in_view: None,
             excluded: HashMap::new(),
@@ -535,7 +539,7 @@ impl Tab {
         self.changed_at = Instant::now();
     }
 
-    fn spawn<F>(&mut self, kind: JobKind, query: Option<Query>, f: F)
+    pub(crate) fn spawn<F>(&mut self, kind: JobKind, query: Option<Query>, f: F)
     where
         F: FnOnce() -> Result<JobResult, String> + Send + 'static,
     {
@@ -572,6 +576,43 @@ impl Tab {
         cols: Vec<usize>,
         fmt: fhv_engine::export::Format,
     ) {
+        let tags = Arc::new(self.tag_set());
+        self.export_rows(path, cols, fmt, move |view| {
+            if tagged {
+                match &view.order {
+                    Some(o) => o.iter().copied().filter(|r| tags.contains(*r)).collect(),
+                    None => (&*view.rows & &*tags).iter().collect(),
+                }
+            } else {
+                view.iter().collect()
+            }
+        });
+    }
+
+    /// Exports the rows at the given display positions (the selection).
+    pub fn start_export_positions(
+        &mut self,
+        path: PathBuf,
+        positions: Vec<Range<u64>>,
+        cols: Vec<usize>,
+        fmt: fhv_engine::export::Format,
+    ) {
+        self.export_rows(path, cols, fmt, move |view| {
+            positions
+                .iter()
+                .flat_map(|r| r.clone())
+                .map_while(|p| view.row_at(p))
+                .collect()
+        });
+    }
+
+    fn export_rows(
+        &mut self,
+        path: PathBuf,
+        cols: Vec<usize>,
+        fmt: fhv_engine::export::Format,
+        pick: impl FnOnce(&View) -> Vec<u32> + Send + 'static,
+    ) {
         if self.job.is_some() || !self.ready() {
             self.status = Some("busy: wait for the current operation".into());
             return;
@@ -582,16 +623,8 @@ impl Tab {
         let t = self.table.clone();
         let p = path.clone();
         let view = self.view.clone();
-        let tags = Arc::new(self.tag_set());
         self.spawn(JobKind::Export(path), None, move || {
-            let rows: Vec<u32> = if tagged {
-                match &view.order {
-                    Some(o) => o.iter().copied().filter(|r| tags.contains(*r)).collect(),
-                    None => (&*view.rows & &*tags).iter().collect(),
-                }
-            } else {
-                view.iter().collect()
-            };
+            let rows = pick(&view);
             let f = std::fs::File::create(&p).map_err(|e| format!("{}: {e}", p.display()))?;
             let mut w = std::io::BufWriter::with_capacity(4 << 20, f);
             let n = match fhv_engine::export::export(&t, &rows, &cols, fmt, &mut w) {
@@ -722,6 +755,8 @@ impl Tab {
                             self.last_query = job.and_then(|j| j.query);
                             // Keep the selected row selected if still shown.
                             self.grid.selected = sel_row.and_then(|r| self.view.position_of(r));
+                            // Ranges are display positions (D-060).
+                            self.grid.clear_ranges();
                             if let Some(p) = self.grid.selected {
                                 crate::grid::scroll_to(&mut self.grid, p);
                             } else {
@@ -768,7 +803,7 @@ impl Tab {
             let superseded = match job.kind {
                 JobKind::Query => self.pending,
                 JobKind::Search => self.hits_for != self.search,
-                JobKind::Export(_) | JobKind::CopyColumn => false,
+                JobKind::Export(_) | JobKind::CopyColumn | JobKind::CopyCells => false,
             };
             if superseded && !self.table.progress.cancelled() {
                 self.table.progress.cancel();
@@ -836,6 +871,7 @@ impl Tab {
                 JobKind::Query => "filtering / sorting".to_string(),
                 JobKind::Search => "searching".to_string(),
                 JobKind::CopyColumn => "copying column values".to_string(),
+                JobKind::CopyCells => "copying the selection".to_string(),
                 JobKind::Export(p) => format!(
                     "exporting to {} ({} rows)",
                     p.display(),
@@ -918,6 +954,10 @@ impl Tab {
 
     /// Syncs grid widths from the per-column widths.
     pub fn sync_widths(&mut self) {
+        if self.grid.sel_cols != self.order {
+            self.grid.sel_cols = self.order.clone();
+            self.grid.clear_ranges();
+        }
         let mut w = vec![26.0, if self.show_hash() { 70.0 } else { 0.0 }];
         w.extend(
             self.order
@@ -939,6 +979,32 @@ impl Tab {
         if self.tags.remove(&row).is_none() {
             self.tags.insert(row, String::new());
         }
+        self.rows_key = None;
+        if self.tagged_only {
+            self.requery();
+        }
+    }
+
+    /// Tags the rows at the given display positions (at most 1 M).
+    pub fn tag_positions(&mut self, positions: &[Range<u64>]) {
+        const MAX: usize = 1_000_000;
+        let rows: Vec<u32> = positions
+            .iter()
+            .flat_map(|r| r.clone())
+            .map_while(|p| self.view.row_at(p))
+            .take(MAX + 1)
+            .collect();
+        if rows.len() > MAX {
+            self.status = Some("not tagged: more than 1 000 000 rows selected".into());
+            return;
+        }
+        for &r in &rows {
+            self.tags.entry(r).or_default();
+        }
+        self.status = Some(format!(
+            "tagged {} rows",
+            crate::app::fmt_n(rows.len() as u64)
+        ));
         self.rows_key = None;
         if self.tagged_only {
             self.requery();

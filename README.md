@@ -77,14 +77,35 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   widest value (sample of visible + 256 spread rows, max 800 px). *Freeze N cols* (toolbar, or
   right-click a header > *Freeze up to here*) pins the first N columns at
   the left while you scroll sideways.
+- **Selection.** Like a spreadsheet: click a cell, drag a rectangle (the
+  grid scrolls near its edges), Shift+click or Shift+arrows to extend,
+  Ctrl+click / Ctrl+drag to add or remove cells and ranges, Ctrl+A for all.
+  The thin gutter at the left of each row selects whole rows (click,
+  Shift+click, Ctrl+click, drag; the box in its header selects all). The
+  last one used (cells or rows) is what Ctrl+C copies, and the status bar
+  says which, with its size (and count / sum of the numbers in small
+  selections). A new filter, sort or column order clears the ranges and
+  the row selection (positions change); the active cell follows its row.
+- **Copy as a table.** Ctrl+C copies the selected cells (bounding rectangle
+  of the ranges, cells outside them left empty) in the default format
+  (Settings: TSV, CSV with `,` or `;`, JSON, Markdown, JSONL; TSV pastes
+  cell by cell into Excel / LibreOffice / Google Sheets); one cell is
+  copied as its bare value. Selected rows are copied with all visible
+  columns and a header line. Right-click: *Copy*, *Copy with headers*,
+  *Copy as ▸*, *Tag selected rows*, *Export selection…*. Values are the
+  file's own (UTC, as written). Up to 1 M cells; beyond, use *Export
+  selection…*.
 - **Detail pane.** Every field of the selected row, including the extra
   fields of malformed rows. JSON cells (e.g. `Payload`) are pretty-printed.
+  The field of the active cell is highlighted and scrolled into view, and
+  follows the arrow keys; click a field name to select that cell in the
+  grid (a hidden column's field is highlighted all the same).
   Copy cell / row / column.
 - **Tags and notes** on rows; "tagged only" filter.
 - **Bad rows** (wrong field count, broken quotes) are counted and can be
   shown. A malformed file never crashes the viewer.
-- **Export** of the current view or tagged rows to CSV or JSONL (visible
-  columns, display order).
+- **Export** of the current view, the tagged rows or the selection to CSV
+  or JSONL (visible columns, display order).
 - **Sessions.** Save and restore filters (query included), columns, sort
   and tags as JSON.
 - **Files.**
@@ -291,7 +312,12 @@ TargetUserName is not blank AND NOT (IpAddress = "-" OR IpAddress = "::1")
 | F3 / Shift+F3 | next / previous match |
 | Ctrl+G | go to row (`#` column, or the file's own row-number column) |
 | Arrows, PgUp/PgDn, Ctrl+Home/End | move the selection |
-| Ctrl+C / Ctrl+Shift+C | copy cell / copy row as indented JSON (right-click a cell for tab-separated) |
+| click / drag, Shift+click, Ctrl+click | select a cell / a range, extend it, add or remove cells and ranges |
+| Shift+arrows | extend the range |
+| Ctrl+A | select all cells |
+| row gutter (left edge): click, Shift+click, Ctrl+click, drag | select rows |
+| Ctrl+C | copy the selection in the default format (one cell: its value) |
+| Ctrl+Shift+C | copy the active row as indented JSON (right-click a cell for tab-separated) |
 | click / Shift+click a header | sort / add a sort column |
 | right click | header and cell menus |
 | Esc | cancel the running operation |
