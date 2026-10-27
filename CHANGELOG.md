@@ -1,5 +1,105 @@
 # Changelog
 
+## 0.4.0 (2026-10-27)
+
+Feature release from a colleague's review: sixteen issues, from a query
+language and grouping to themes and an idle app that no longer uses CPU.
+
+Filtering
+- Query bar (Ctrl+L): write the whole filter as text, e.g.
+  `Channel = Security AND (EventID in (4624, 4625) OR Message contains failed) AND NOT User startswith SYSTEM`.
+  AND / OR / NOT with parentheses, quoted names and values, `in`,
+  `between`, `is blank`, regex and `cs` / `ci`; dates follow the display
+  time zone. A query fills the chips and editing chips rewrites the query;
+  nothing is applied until the whole query is valid, errors point at the
+  character and suggest close column names. Tab completes columns and
+  operators; history and sessions keep queries (#1).
+- Click a filter chip to invert it (NOT, shown as ≠ / NOT (…)), click its
+  × to remove it; saved in sessions (#3).
+- Global search: "only matches" is on by default and your last choice is
+  remembered; Clear filters empties the search box (#7).
+- Group rows by one or several columns (header menu > Group by this
+  column, repeatable; first chosen = outermost): collapsible group headers
+  with value and row count at every level, a `(blank)` group, a group bar to
+  sort groups by value or count per level, move or remove levels, expand /
+  collapse all. Group header menu: Filter to this group / Exclude this
+  group. Export writes rows in group order; selection, copy and tagging skip
+  header rows; grouping is saved in sessions. Counts come from the column
+  index when there is one, otherwise a parallel scan (Esc cancels); more
+  than 1,000,000 groups is refused with a warning (#5).
+
+Display
+- Coloring rules (View > Coloring rules…, cell menu "Color rows like
+  this…"): color rows or matching cells from query-language conditions
+  (`Info contains Critical`) with theme palette colors (fill, text, bold);
+  first matching rule wins; saved in settings and sessions; export / import
+  as JSON; row count per rule (#4).
+- Highlight duplicate / unique values per column (header menu), over the
+  filtered view or the whole file, several columns at once, occurrence count
+  in the tooltip; counted from column indexes or a cancellable background
+  scan with bounded memory (#13).
+- Themes: Dark, Dark soft, Dark high contrast, Light, Light high contrast,
+  Dracula, Solarized dark / light, Nord, Gruvbox dark, and System (follows
+  the OS). View > Theme previews on hover. Themes are JSON files; your own
+  go in `<config>/themes/`. Every theme passes WCAG AA text contrast, the
+  high-contrast ones AAA (#12).
+- View > Settings: theme, grid font (bundled, installed or a font file,
+  monospaced only by default), grid font size 8-32 pt (Ctrl+= / Ctrl+- /
+  Ctrl+0, Ctrl+wheel), UI scale, Reset to default. A font that cannot be
+  read is refused and the previous font kept (#14).
+- When the file already has a row-number column (RecordNumber, #, No.,
+  Index, Line, Ligne…) the viewer's own # column is hidden and that column
+  is used by Go to row (Ctrl+G) and the status bar. View > Row numbers:
+  Auto / Always show # / Never show #, remembered per file. Gappy ids such
+  as a time-sorted EventRecordId are not taken for a row counter (#9).
+
+Dates
+- Many more formats detected: ISO 8601 basic and offset variants, 3-9
+  fraction digits, RFC 2822, 12h AM/PM, English and French month names,
+  Apache CLF, and syslog without a year (the year comes from the file date
+  and is flagged in the UI) (#10).
+- Epoch columns detected and shown as times: Unix s / ms / µs / ns, Windows
+  FILETIME, .NET ticks, Chrome / WebKit; Excel serial, Cocoa and Unix days
+  when the header says so (#10).
+- Column menu "Date format…": Auto, Not a date, a preset, or a custom
+  strftime format with a live preview and the unparsable count; zone for
+  times without an offset; year for year-less dates. Saved in sessions and
+  remembered per file. docs/DATE-FORMATS.md lists every format (#10).
+
+Columns
+- Drag a column header to reorder: a drop line and a ghost show the target,
+  Esc cancels, the grid scrolls near the edges, a plain click still sorts.
+  Dropping across the frozen edge moves the edge by one (#2).
+- Auto-size: double-click a header's right edge, or "Auto-size column" /
+  "Auto-size all columns" in the header menu; fits the widest value among
+  the visible rows and a sample of the file, up to 800 px (#8).
+- Hidden columns come back at their previous position; the right half of a
+  column's resize handle can be grabbed.
+
+Selection and copy
+- Spreadsheet-like selection: click, drag (auto-scroll), Shift+click /
+  Shift+arrows to extend, Ctrl+click / Ctrl+drag for several ranges,
+  Ctrl+A; size and count / sum of numbers in the status bar (#15).
+- Row gutter at the start of each row: click / Shift / Ctrl / drag select
+  whole rows, the header box selects all; Tag selected rows, Export
+  selection (#16).
+- Ctrl+C copies the selection as a table: TSV by default, or CSV (`,` /
+  `;`), JSON, Markdown, JSONL (Settings); Copy as ▸ and Copy with headers
+  in the cell menu; beyond 1 M cells use Export selection (#16).
+- The detail pane highlights and scrolls to the active cell's field; click
+  a field to select its cell (#6).
+- Fixed: Ctrl+C did nothing once the grid had keyboard focus.
+
+Performance
+- No CPU use while idle: 0 frames/s and 0 % CPU, was about 120 frames/s
+  and 20 % (the window title was re-sent every frame). While work runs the
+  progress display repaints 10 times a second, once a second in the
+  background (#11).
+
+Other
+- csv-gen: new `dates` layout. Index cache version 5 (existing caches are
+  rebuilt once).
+
 ## 0.3.1 (2026-10-25)
 
 - Arrow keys keep moving the selection after a click in the grid (they

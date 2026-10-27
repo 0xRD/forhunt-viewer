@@ -3,9 +3,14 @@
 Open work, roughly by priority.
 
 ## Features
-- Group-by with counts; column statistics and a time histogram.
-- Colour rules.
+- Column statistics and a time histogram.
 - Per-tool column layouts.
+- Leftovers from the 0.4.0 issues: "only unique / only duplicate rows"
+  filter (#13); row-number mode in Reopen with options (#9); modifier-click
+  on a header to select the column (#15); drag to reorder group levels and
+  per-group open/closed state in sessions (#5); NOT in the condition
+  editor (#3); value autocomplete in the query bar (#1); column order per
+  file outside sessions (#2); README theme screenshots (#12).
 - Merged timeline of several CSV files (evidence files already merge, D-033).
 - JSONL input.
 
