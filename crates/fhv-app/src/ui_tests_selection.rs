@@ -441,3 +441,23 @@ fn esc_over_the_detail_pane_closes_it() {
     h.run_steps(2);
     assert!(!h.state().settings.detail_pane);
 }
+
+/// Ctrl+C with the default format (Markdown) copies the column names in
+/// the header row; Ctrl+Alt+C too (a Markdown table needs them).
+#[test]
+fn ctrl_c_markdown_has_the_column_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    h.state_mut().settings.copy_format = crate::copyfmt::Format::Markdown;
+    let p = cell(&h, 1, DC_FIRST);
+    click(&mut h, p, Modifiers::NONE);
+    let p = cell(&h, 2, DC_FIRST + 2);
+    click(&mut h, p, Modifiers::SHIFT);
+    let text = copy(&mut h).expect("clipboard");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "| Time | EventId | User |", "{text}");
+    assert_eq!(lines[1], "| --- | --- | --- |");
+    assert_eq!(lines[2], "| 2024-03-11 10:00:01.0000000 | 4625 | asmith |");
+    assert_eq!(lines.len(), 4);
+}

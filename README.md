@@ -97,8 +97,8 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   names out. The default format is set in
   File > Settings: **Markdown** (default since 0.5), TSV (pastes cell by
   cell into Excel / LibreOffice / Google Sheets), CSV with `,` or `;`,
-  JSON, JSONL or HTML. Without headers JSON / JSONL rows are arrays, a
-  Markdown table gets an empty header row. **HTML** copies a table styled
+  JSON, JSONL or HTML. Without headers JSON / JSONL rows are arrays; a
+  Markdown table always has the column names in its header row. **HTML** copies a table styled
   like the current theme and grid font, with the coloring rules (fill, text
   color, bold), all inline so it survives pasting into mail, Word,
   Confluence or a ticket; plain-text targets get tab-separated text. One

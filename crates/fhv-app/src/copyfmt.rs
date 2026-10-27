@@ -199,9 +199,8 @@ fn md_cell(v: &str) -> String {
 }
 
 /// The table as text. `headers`: a header line (TSV, CSV), objects keyed
-/// by column name instead of arrays (JSON, JSONL), the column names in
-/// the header row instead of empty cells (Markdown needs a header row),
-/// a `<thead>` (HTML). Every value is a string except JSON object / array
+/// by column name instead of arrays (JSON, JSONL), a `<thead>` (HTML).
+/// A Markdown table always has the names in its header row. Every value is a string except JSON object / array
 /// cells, embedded as JSON.
 pub fn render(
     fmt: Format,
@@ -259,11 +258,9 @@ pub fn render(
                 }
                 out.push('\n');
             };
-            if headers {
-                line(&mut out, &mut names.iter().map(|n| md_cell(n)));
-            } else {
-                line(&mut out, &mut names.iter().map(|_| String::new()));
-            }
+            // A Markdown table needs a header row: always the names (an
+            // empty row says nothing, D-093).
+            line(&mut out, &mut names.iter().map(|n| md_cell(n)));
             line(&mut out, &mut names.iter().map(|_| "---".to_string()));
             for r in rows {
                 line(&mut out, &mut r.iter().map(|v| md_cell(v)));
@@ -835,8 +832,8 @@ mod tests {
         assert_eq!(lines[4], "|  |  |  |  |");
     }
 
-    /// Values only (#28): no header line, arrays instead of objects, an
-    /// empty Markdown header row, no `<thead>`.
+    /// Values only (#28): no header line, arrays instead of objects, no
+    /// `<thead>`; Markdown keeps its header row of names.
     #[test]
     fn values_only_per_format() {
         let (names, rows) = tricky();
@@ -852,9 +849,11 @@ mod tests {
         let jl = render(Format::Jsonl, ',', &names, &rows, false);
         assert!(jl.lines().all(|l| l.starts_with('[')));
         assert_eq!(jl.lines().count(), 3);
+        // Markdown keeps the names either way (D-093).
         let md = render(Format::Markdown, ',', &names, &rows, false);
+        assert_eq!(md, render(Format::Markdown, ',', &names, &rows, true));
         let lines: Vec<&str> = md.lines().collect();
-        assert_eq!(lines[0], "|  |  |  |  |");
+        assert_eq!(lines[0], "| Name | Value | Name |  |");
         assert_eq!(lines[1], "| --- | --- | --- | --- |");
         assert_eq!(lines.len(), 5);
         let html = render(Format::Html, ',', &names, &rows, false);

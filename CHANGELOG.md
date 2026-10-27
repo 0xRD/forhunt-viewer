@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2 (2026-10-27)
+
+- A Markdown copy always has the column names in its header row, also
+  with *Copy values* (Ctrl+Alt+C): 0.5.0 wrote an empty header row.
+
 ## 0.5.1 (2026-10-27)
 
 - Settings… moved from the View menu to the File menu.
