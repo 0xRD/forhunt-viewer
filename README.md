@@ -92,8 +92,9 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
 - **Copy as a table.** Only the rows and columns that hold a selected cell
   are copied (Ctrl+click cells in columns A and D: A and D, not B and C;
   unselected cells of those rows and columns are left empty), in display
-  order. *Copy values* (Ctrl+C) copies the values without column names;
-  *Copy with headers* (Ctrl+Alt+C) adds them. The default format is set in
+  order. *Copy with headers* (Ctrl+C) copies the column names, then the
+  values; *Copy values* (Ctrl+Alt+C, Cmd+Option+C on macOS) leaves the
+  names out. The default format is set in
   View > Settings: **Markdown** (default since 0.5), TSV (pastes cell by
   cell into Excel / LibreOffice / Google Sheets), CSV with `,` or `;`,
   JSON, JSONL or HTML. Without headers JSON / JSONL rows are arrays, a
@@ -101,8 +102,8 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   like the current theme and grid font, with the coloring rules (fill, text
   color, bold), all inline so it survives pasting into mail, Word,
   Confluence or a ticket; plain-text targets get tab-separated text. One
-  cell is copied as its bare value. Edit menu or right-click: *Copy
-  values*, *Copy with headers*, *Copy as ▸* (a format once, with or
+  cell is copied as its bare value. Edit menu or right-click: *Copy with
+  headers*, *Copy values*, *Copy as ▸* (a format once, with or
   without headers), and in the cell menu *Tag selected rows*, *Export
   selection…*. Values are the file's own (UTC, as written). Up to 1 M
   cells; beyond, use *Export selection…*.
@@ -111,8 +112,8 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   The field of the active cell is highlighted and scrolled into view, and
   follows the arrow keys; click a field name to select that cell in the
   grid (a hidden column's field is highlighted all the same).
-  Copy cell / row / column. Close it with its × or Ctrl+D (View > Detail
-  pane); it reopens at the same width.
+  Copy cell / row / column. Close it with its ×, Ctrl+D (View > Detail
+  pane) or Esc over it; it reopens at the same width.
 - **Coloring rules** (View > *Coloring rules…*, or right-click a cell >
   *Color rows like this…*): a condition in the [query language](#query-language)
   (`Info contains Critical`, `EventID in (4624, 4625)`, `* contains mimikatz`
@@ -127,7 +128,7 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   rules under a name ("Logon events", "Persistence"...), then load, save,
   rename or delete sets in the dialog, or switch from View > *Rule set*.
   *Export… / Import…* share a ruleset as JSON; *Import as new set…* keeps
-  a file as a set. Only the rows on screen are
+  a file as a set. Sessions remember which set they used. Only the rows on screen are
   evaluated, so scrolling costs the same with or without rules. The
   selected row keeps its selection color.
 - **Duplicate / unique values**: right-click a header > *Highlight duplicates
@@ -149,7 +150,7 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   count (ascending / descending, per level; rows inside a group keep the
   row sort), move it in or out, or remove it; *Expand all* / *Collapse
   all* / *Clear grouping*. A new level starts as an overview: every group
-  collapsed, largest first. *Hide grouped columns* (group bar; default in
+  collapsed, largest first (Settings change both). *Hide grouped columns* (group bar; default in
   Settings) leaves the grouped columns out of the grid, copy and export of
   the visible columns, since their value is in the group headers; they
   come back at their place when the grouping goes. Click a header's arrow (or double-click it, or
@@ -181,7 +182,8 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
     clocks), month names in English and French, Apache CLF, year-less syslog
     (the year assumed from the file date is flagged), Unix s / ms / µs / ns,
     FILETIME, .NET ticks, Chrome/WebKit, and Excel / Cocoa / day counts when
-    the header says so ([docs/DATE-FORMATS.md](docs/DATE-FORMATS.md)).
+    the header says so ([docs/DATE-FORMATS.md](docs/DATE-FORMATS.md), also
+  in the app: Help > Date formats).
     Right-click a header > *Date format…* to pick a preset, type a custom
     `strftime` format (live preview, unparsable count), set the zone of
     times without an offset or the year of year-less dates; the choice is
@@ -382,8 +384,8 @@ TargetUserName is not blank AND NOT (IpAddress = "-" OR IpAddress = "::1")
 | Shift+arrows | extend the range |
 | Ctrl+A | select all cells |
 | row gutter (left edge): click, Shift+click, Ctrl+click, drag | select rows |
-| Ctrl+C | copy the selected values, no headers, in the default format (one cell: its value) |
-| Ctrl+Alt+C | copy the selection with headers |
+| Ctrl+C | copy the selection with its column names, in the default format (one cell: its value) |
+| Ctrl+Alt+C | copy the selected values only, without column names |
 | Ctrl+Shift+C | copy the active row as indented JSON (right-click a cell for tab-separated) |
 | click / Shift+click a header | sort / add a sort column |
 | Left / Right on a group header, click its arrow, double-click it | close / open the group |

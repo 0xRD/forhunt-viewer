@@ -568,8 +568,8 @@ fn projection(cells: &CellSel) -> Option<(Vec<Range<u64>>, Vec<usize>)> {
 /// Copies the selection: returns what goes on the clipboard, or starts a
 /// background copy (it arrives through `Tab::clipboard`), or says in the
 /// status bar why not. `fmt` None: the default format, and a single cell
-/// without headers is copied as its bare value. `headers`: "Copy with
-/// headers" (#28); Ctrl+C copies values only.
+/// is copied as its bare value. `headers`: with the column names (Ctrl+C,
+/// D-092) or values only (Ctrl+Alt+C, #28).
 pub fn copy(
     t: &mut Tab,
     fmt: Option<Format>,
@@ -582,7 +582,7 @@ pub fn copy(
         t.status = Some("nothing selected".into());
         return None;
     };
-    if fmt.is_none() && !p.headers && p.mask.is_none() && p.cells() == 1 {
+    if fmt.is_none() && p.mask.is_none() && p.cells() == 1 {
         return single_cell(t).map(Clip::text);
     }
     let fmt = fmt.unwrap_or(default);

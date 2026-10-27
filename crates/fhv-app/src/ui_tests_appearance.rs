@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 
 use crate::app::App;
 use crate::settings::{GridFont, Settings};
@@ -298,4 +299,36 @@ fn bad_font_file_keeps_the_previous_font() {
     h.state_mut().settings.grid_font = GridFont::File(good.clone());
     wait(&mut h, idle);
     assert_eq!(h.state().settings.grid_font, GridFont::File(good));
+}
+
+/// Help > Date formats and the date dialog's "Learn more" open the
+/// documentation in the Settings window (no browser: eframe has no links
+/// feature here).
+#[test]
+fn docs_open_in_the_settings_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = big(dir.path(), 50);
+    let mut h = harness(dir.path(), &file, Settings::default());
+    wait(&mut h, idle);
+    h.get_by_label("Help").click();
+    h.run_steps(2);
+    h.get_by_label("Date formats").click();
+    h.run_steps(3);
+    let a = &h.state().appearance;
+    assert!(a.settings_open);
+    assert_eq!(a.settings_tab, Some(0));
+    h.get_by_label_contains("Which date and time formats forhunt-viewer reads");
+    // View > Settings… opens the settings tab again.
+    h.get_by_label("View").click();
+    h.run_steps(2);
+    h.get_by_label("Settings…").click();
+    h.run_steps(2);
+    assert_eq!(h.state().appearance.settings_tab, None);
+    h.state_mut().appearance.settings_open = false;
+    h.state_mut().open_date_format(0);
+    h.run_steps(2);
+    h.get_by_label("Learn more").click();
+    h.run_steps(3);
+    let a = &h.state().appearance;
+    assert!(a.settings_open && a.settings_tab == Some(0));
 }

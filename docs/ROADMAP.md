@@ -5,10 +5,9 @@ Open work, roughly by priority.
 ## Features
 - Column statistics and a time histogram.
 - Per-tool column layouts.
-- Leftovers from the 0.5.0 issues: Esc closes the detail pane when it has
-  focus (#30); Settings defaults for the grouping overview (#18); sessions
-  that name the rule set they used (#20); screenshots of the header
-  contrast audit (#21, ratios in D-087).
+- Leftover from the 0.5.0 issues: screenshots of the header contrast
+  audit (#21, ratios in D-087); needs an offscreen renderer for the tests
+  (egui_kittest with wgpu) or a manual capture.
 - Leftovers from the 0.4.0 issues: "only unique / only duplicate rows"
   filter (#13); row-number mode in Reopen with options (#9); modifier-click
   on a header to select the column (#15); drag to reorder group levels and

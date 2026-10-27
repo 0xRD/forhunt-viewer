@@ -192,7 +192,7 @@ impl App {
             conversions: Vec::new(),
             help: false,
             html_clip: None,
-            copy_as_headers: false,
+            copy_as_headers: true,
             focus_search: false,
             detail: None,
             detail_pick: None,
@@ -411,16 +411,17 @@ impl App {
         if copy_row && let Some(t) = self.tab() {
             copy_selected_row(ctx, t, false);
         }
-        let copy_hdr = ctx.input_mut(|i| {
+        let copy_values = ctx.input_mut(|i| {
             i.consume_shortcut(&KeyboardShortcut::new(
                 Modifiers::COMMAND | Modifiers::ALT,
                 Key::C,
             ))
         });
+        // Ctrl+C: with the column names; Ctrl+Alt+C: values only.
         if copy && !copy_row && !typing {
-            self.copy_selection(ctx, None, false);
-        } else if copy_hdr && !typing {
             self.copy_selection(ctx, None, true);
+        } else if copy_values && !typing {
+            self.copy_selection(ctx, None, false);
         }
         if (f3 || sf3)
             && let Some(t) = self.tab()
@@ -646,6 +647,7 @@ impl App {
                 if ui.button("Settings…").on_hover_text("theme, grid font and size, UI scale").clicked() {
                     ui.close();
                     self.appearance.settings_open = true;
+                    self.appearance.settings_tab = None;
                 }
                 let key = ui
                     .ctx()
@@ -771,7 +773,10 @@ impl App {
                     ui.close();
                     self.help = true;
                 }
-                ui.hyperlink_to("Date formats (docs)", crate::datefmt::DOCS_URL);
+                if ui.button("Date formats").clicked() {
+                    ui.close();
+                    self.show_docs(0);
+                }
             });
         });
     }
@@ -1203,6 +1208,16 @@ impl App {
     }
 
     fn detail_pane(&mut self, ui: &mut Ui) {
+        // Esc with the pointer over the pane closes it, unless Esc is
+        // needed to cancel a running operation.
+        if ui.input(|i| i.key_pressed(Key::Escape))
+            && ui.ui_contains_pointer()
+            && self.tab_ref().is_none_or(|t| t.job.is_none())
+        {
+            self.settings.detail_pane = false;
+            self.settings.save();
+            return;
+        }
         let Some(t) = self.tabs.get_mut(self.active) else {
             return;
         };
@@ -1839,6 +1854,18 @@ impl App {
         if !crate::datefmt::show(d, t, ctx) {
             self.datefmt = None;
         }
+        if self.datefmt.as_ref().is_some_and(|d| d.want_docs) {
+            if let Some(d) = &mut self.datefmt {
+                d.want_docs = false;
+            }
+            self.show_docs(0);
+        }
+    }
+
+    /// Opens the Settings window on a documentation page.
+    pub(crate) fn show_docs(&mut self, page: usize) {
+        self.appearance.settings_open = true;
+        self.appearance.settings_tab = Some(page);
     }
 
     pub(crate) fn open_filter_editor(&mut self, c: usize) {
@@ -2348,9 +2375,9 @@ impl App {
                             ),
                             (
                                 "Ctrl+C",
-                                "copy the selected values, no headers (default format: Markdown; Edit or right-click: Copy as)",
+                                "copy the selection with its column names (default format: Markdown; one cell: its value; Edit or right-click: Copy as)",
                             ),
-                            ("Ctrl+Alt+C", "copy the selection with headers"),
+                            ("Ctrl+Alt+C", "copy the selected values only, no column names"),
                             (
                                 "Ctrl+Shift+C",
                                 "copy row as JSON (right-click: tab-separated)",
@@ -2383,7 +2410,12 @@ impl App {
 
     fn save_session(&mut self) {
         let Some(t) = self.tab_ref() else { return };
-        let s = session::capture(t);
+        let mut s = session::capture(t);
+        s.rule_set = self
+            .settings
+            .rule_set
+            .clone()
+            .filter(|n| self.settings.rule_sets.contains_key(n));
         let stem = t
             .path
             .file_stem()
@@ -2424,13 +2456,27 @@ impl App {
                 return;
             }
         };
+        self.apply_session(&s);
+    }
+
+    /// Opens the session's file and applies the session to it.
+    pub(crate) fn apply_session(&mut self, s: &session::Session) {
         self.open(&s.file);
         if let Some(t) = self.tabs.iter_mut().find(|t| t.path == s.file) {
-            let warn = session::apply(t, &s);
+            let warn = session::apply(t, s);
             if let Some(r) = &s.rules {
                 self.settings.coloring_rules = r.clone();
                 self.rules = std::sync::Arc::new(r.clone());
                 t.set_rules(self.rules.clone());
+                // The set the session used becomes the active one; a set
+                // missing here is added from the session's rules.
+                self.settings.rule_set = s.rule_set.clone();
+                if let Some(n) = &s.rule_set {
+                    self.settings
+                        .rule_sets
+                        .entry(n.clone())
+                        .or_insert_with(|| r.clone());
+                }
                 self.settings.save();
             }
             if !warn.is_empty() {
@@ -2495,22 +2541,22 @@ fn copy_menu(
         key(Modifiers::COMMAND | Modifiers::ALT),
     );
     if ui
-        .add(egui::Button::new("Copy values").shortcut_text(k))
+        .add(egui::Button::new("Copy with headers").shortcut_text(k))
         .on_hover_text(format!(
-            "the selected cells without the column names, as {}",
+            "the column names, then the selected cells, as {}",
             default.label()
         ))
         .clicked()
     {
-        pick = Some((None, false));
+        pick = Some((None, true));
         ui.close();
     }
     if ui
-        .add(egui::Button::new("Copy with headers").shortcut_text(kh))
-        .on_hover_text("the column names, then the selected cells")
+        .add(egui::Button::new("Copy values").shortcut_text(kh))
+        .on_hover_text("the selected cells without the column names")
         .clicked()
     {
-        pick = Some((None, true));
+        pick = Some((None, false));
         ui.close();
     }
     ui.menu_button("Copy as", |ui| {
@@ -2927,6 +2973,8 @@ impl eframe::App for App {
         for t in &mut self.tabs {
             running |= t.poll(&tz);
             t.set_rules(self.rules.clone());
+            t.groups.new_collapsed = self.settings.group_collapsed;
+            t.groups.new_sort = self.settings.group_sort;
             running |= crate::dupes::poll(t, self.settings.query_case_sensitive);
             clips.extend(t.clipboard.take());
         }

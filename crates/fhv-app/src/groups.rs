@@ -23,7 +23,6 @@ use fhv_engine::view::{Query, View};
 use crate::tab::Tab;
 
 /// The grouping of a tab.
-#[derive(Default)]
 pub struct GroupState {
     /// Levels chosen (first = outermost).
     pub levels: Vec<Level>,
@@ -39,6 +38,10 @@ pub struct GroupState {
     pub collapsed: bool,
     /// The group-level columns are left out of the grid (#29).
     pub hide_cols: bool,
+    /// How a new level starts (Settings, #18): collapsed or open, and the
+    /// order of its groups.
+    pub new_collapsed: bool,
+    pub new_sort: GroupSort,
     /// Groups whose state differs from `collapsed`, by path hash.
     pub flipped: HashSet<u64>,
     /// Why the levels are not applied (too many groups...).
@@ -48,6 +51,26 @@ pub struct GroupState {
     /// The last ungrouped view and its query: changing only the grouping
     /// does not filter and sort again.
     pub base: Option<(Query, View)>,
+}
+
+impl Default for GroupState {
+    fn default() -> GroupState {
+        GroupState {
+            levels: Vec::new(),
+            applied: Vec::new(),
+            tree: None,
+            hashes: Vec::new(),
+            lines: None,
+            collapsed: false,
+            hide_cols: false,
+            new_collapsed: true,
+            new_sort: GroupSort::CountDesc,
+            flipped: HashSet::new(),
+            warning: None,
+            done: Default::default(),
+            base: None,
+        }
+    }
 }
 
 /// What a grouping job returns with the view.
@@ -429,9 +452,9 @@ pub fn apply(t: &mut Tab, a: Action) {
             if g.level_of(c).is_none() {
                 g.levels.push(Level {
                     col: c,
-                    sort: GroupSort::CountDesc,
+                    sort: g.new_sort,
                 });
-                g.collapsed = true;
+                g.collapsed = g.new_collapsed;
                 g.flipped.clear();
             }
             true

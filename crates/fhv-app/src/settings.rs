@@ -45,6 +45,9 @@ pub struct Settings {
     pub copy_csv_delim: char,
     /// New tabs start with "Hide grouped columns" on (#29).
     pub hide_grouped_cols: bool,
+    /// A new group level starts collapsed, its groups in this order (#18).
+    pub group_collapsed: bool,
+    pub group_sort: fhv_engine::group::GroupSort,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -102,6 +105,8 @@ impl Default for Settings {
             copy_format: Default::default(),
             copy_csv_delim: ',',
             hide_grouped_cols: false,
+            group_collapsed: true,
+            group_sort: fhv_engine::group::GroupSort::CountDesc,
         }
     }
 }

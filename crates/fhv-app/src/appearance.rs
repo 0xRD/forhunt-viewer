@@ -15,6 +15,9 @@ type FontLoad = Option<Result<egui::FontData, String>>;
 
 pub struct State {
     pub settings_open: bool,
+    /// Tab of the Settings window: None = settings, else a page of
+    /// `docs::PAGES`.
+    pub settings_tab: Option<usize>,
     /// Theme under the pointer in a picker this frame / the last one
     /// (previewed while hovered).
     hovered: Option<String>,
@@ -41,6 +44,7 @@ impl State {
         let (user_themes, theme_errors) = theme::load_dir(&config_dir.join("themes"));
         State {
             settings_open: false,
+            settings_tab: None,
             hovered: None,
             preview: None,
             applied: String::new(),
@@ -204,109 +208,146 @@ impl State {
             .open(&mut open)
             .default_width(420.0)
             .show(ctx, |ui| {
-                egui::CollapsingHeader::new("Theme")
-                    .default_open(true)
-                    .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.settings_tab, None, "Settings");
+                    for (i, (title, _)) in crate::docs::PAGES.iter().enumerate() {
+                        ui.selectable_value(&mut self.settings_tab, Some(i), *title)
+                            .on_hover_text("documentation");
+                    }
+                });
+                ui.separator();
+                match self.settings_tab.and_then(|i| crate::docs::PAGES.get(i)) {
+                    Some((_, md)) => {
                         egui::ScrollArea::vertical()
-                            .id_salt("themes")
-                            .max_height(180.0)
-                            .show(ui, |ui| self.theme_picker(ui, s));
-                        let credit = &theme::current(ui.ctx()).credit;
-                        if !credit.is_empty() {
-                            ui.label(RichText::new(credit).small().weak());
-                        }
-                    });
-                ui.separator();
-                ui.strong("Grid font");
-                self.font_picker(ui, s);
-                ui.horizontal(|ui| {
-                    ui.label("Size");
-                    let mut v = s.grid_font_size;
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut v, settings::FONT_MIN..=settings::FONT_MAX)
-                                .step_by(0.5)
-                                .suffix(" pt"),
-                        )
-                        .on_hover_text("also Ctrl+wheel, Ctrl+= / Ctrl+- / Ctrl+0")
-                        .changed()
-                    {
-                        s.grid_font_size = settings::clamp_size(v);
-                        s.save();
+                            .id_salt("docs")
+                            .max_height(560.0)
+                            .show(ui, |ui| crate::docs::show(ui, md));
                     }
-                });
-                let preview =
-                    "2024-03-11 10:00:00.0000000  4624  C:\\Windows\\System32  0x8020000000000000";
-                ui.label(
-                    RichText::new(preview)
-                        .font(FontId::new(s.grid_font_size, fonts::grid_family())),
-                );
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("UI scale");
-                    // Applied when the drag ends: zooming under the pointer
-                    // would move the slider while it is dragged.
-                    let mut v = self.scale_edit.unwrap_or(s.ui_scale);
-                    let r = ui
-                        .add(
-                            egui::Slider::new(&mut v, 0.5..=3.0)
-                                .step_by(0.05)
-                                .custom_formatter(|v, _| format!("{:.0} %", v * 100.0)),
-                        )
-                        .on_hover_text("menus, panels and dialogs; the grid has its own size");
-                    if r.dragged() {
-                        self.scale_edit = Some(v);
-                    } else if r.changed() || r.drag_stopped() {
-                        self.scale_edit = None;
-                        s.ui_scale = settings::clamp_scale(v);
-                        s.save();
-                    }
-                });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Ctrl+C copies the selection as");
-                    let before = (s.copy_format, s.copy_csv_delim);
-                    egui::ComboBox::from_id_salt("copy_format")
-                        .selected_text(s.copy_format.label())
-                        .show_ui(ui, |ui| {
-                            for f in crate::copyfmt::Format::ALL {
-                                ui.selectable_value(&mut s.copy_format, f, f.label());
-                            }
-                        });
-                    ui.label("CSV delimiter");
-                    ui.radio_value(&mut s.copy_csv_delim, ',', ",");
-                    ui.radio_value(&mut s.copy_csv_delim, ';', ";");
-                    if before != (s.copy_format, s.copy_csv_delim) {
-                        s.save();
-                    }
-                });
-                ui.separator();
-                if ui
-                    .checkbox(&mut s.hide_grouped_cols, "Hide grouped columns in new tabs")
-                    .on_hover_text("the grouped columns' values are already in the group headers")
-                    .changed()
-                {
-                    s.save();
-                }
-                ui.separator();
-                if ui
-                    .button("Reset to default")
-                    .on_hover_text("Dark theme, JetBrains Mono 12.5 pt, UI scale 100 %")
-                    .clicked()
-                {
-                    let d = Settings::default();
-                    s.theme = d.theme;
-                    s.dark = d.dark;
-                    s.grid_font = d.grid_font;
-                    s.grid_font_size = d.grid_font_size;
-                    s.mono_only = d.mono_only;
-                    s.ui_scale = d.ui_scale;
-                    self.font_error = None;
-                    s.save();
+                    None => self.settings_body(ui, s),
                 }
             });
         if !open {
             self.settings_open = false;
+        }
+    }
+
+    fn settings_body(&mut self, ui: &mut Ui, s: &mut Settings) {
+        egui::CollapsingHeader::new("Theme")
+            .default_open(true)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("themes")
+                    .max_height(180.0)
+                    .show(ui, |ui| self.theme_picker(ui, s));
+                let credit = &theme::current(ui.ctx()).credit;
+                if !credit.is_empty() {
+                    ui.label(RichText::new(credit).small().weak());
+                }
+            });
+        ui.separator();
+        ui.strong("Grid font");
+        self.font_picker(ui, s);
+        ui.horizontal(|ui| {
+            ui.label("Size");
+            let mut v = s.grid_font_size;
+            if ui
+                .add(
+                    egui::Slider::new(&mut v, settings::FONT_MIN..=settings::FONT_MAX)
+                        .step_by(0.5)
+                        .suffix(" pt"),
+                )
+                .on_hover_text("also Ctrl+wheel, Ctrl+= / Ctrl+- / Ctrl+0")
+                .changed()
+            {
+                s.grid_font_size = settings::clamp_size(v);
+                s.save();
+            }
+        });
+        let preview =
+            "2024-03-11 10:00:00.0000000  4624  C:\\Windows\\System32  0x8020000000000000";
+        ui.label(RichText::new(preview).font(FontId::new(s.grid_font_size, fonts::grid_family())));
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("UI scale");
+            // Applied when the drag ends: zooming under the pointer
+            // would move the slider while it is dragged.
+            let mut v = self.scale_edit.unwrap_or(s.ui_scale);
+            let r = ui
+                .add(
+                    egui::Slider::new(&mut v, 0.5..=3.0)
+                        .step_by(0.05)
+                        .custom_formatter(|v, _| format!("{:.0} %", v * 100.0)),
+                )
+                .on_hover_text("menus, panels and dialogs; the grid has its own size");
+            if r.dragged() {
+                self.scale_edit = Some(v);
+            } else if r.changed() || r.drag_stopped() {
+                self.scale_edit = None;
+                s.ui_scale = settings::clamp_scale(v);
+                s.save();
+            }
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("Ctrl+C copies the selection as");
+            let before = (s.copy_format, s.copy_csv_delim);
+            egui::ComboBox::from_id_salt("copy_format")
+                .selected_text(s.copy_format.label())
+                .show_ui(ui, |ui| {
+                    for f in crate::copyfmt::Format::ALL {
+                        ui.selectable_value(&mut s.copy_format, f, f.label());
+                    }
+                });
+            ui.label("CSV delimiter");
+            ui.radio_value(&mut s.copy_csv_delim, ',', ",");
+            ui.radio_value(&mut s.copy_csv_delim, ';', ";");
+            if before != (s.copy_format, s.copy_csv_delim) {
+                s.save();
+            }
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("New groupings:");
+            let before = (s.group_collapsed, s.group_sort);
+            ui.checkbox(&mut s.group_collapsed, "start collapsed");
+            egui::ComboBox::from_id_salt("group_sort")
+                .selected_text(
+                    crate::groups::SORTS
+                        .iter()
+                        .find(|x| x.0 == s.group_sort)
+                        .map_or("", |x| x.1),
+                )
+                .show_ui(ui, |ui| {
+                    for (v, label) in crate::groups::SORTS {
+                        ui.selectable_value(&mut s.group_sort, v, label);
+                    }
+                });
+            if before != (s.group_collapsed, s.group_sort) {
+                s.save();
+            }
+        });
+        if ui
+            .checkbox(&mut s.hide_grouped_cols, "Hide grouped columns in new tabs")
+            .on_hover_text("the grouped columns' values are already in the group headers")
+            .changed()
+        {
+            s.save();
+        }
+        ui.separator();
+        if ui
+            .button("Reset to default")
+            .on_hover_text("Dark theme, JetBrains Mono 12.5 pt, UI scale 100 %")
+            .clicked()
+        {
+            let d = Settings::default();
+            s.theme = d.theme;
+            s.dark = d.dark;
+            s.grid_font = d.grid_font;
+            s.grid_font_size = d.grid_font_size;
+            s.mono_only = d.mono_only;
+            s.ui_scale = d.ui_scale;
+            self.font_error = None;
+            s.save();
         }
     }
 

@@ -346,3 +346,28 @@ fn rule_sets_save_load_rename_delete() {
     assert!(!s.rule_sets.contains_key("Logon events"));
     assert_eq!(s.coloring_rules.len(), 1, "the current rules stay");
 }
+
+/// A session names the rule set its rules came from; loading it makes
+/// that set active, and adds it when this machine does not have it.
+#[test]
+fn sessions_name_their_rule_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let crit = Rule {
+        when: "Info contains Critical".into(),
+        ..Rule::default()
+    };
+    let mut h = harness(dir.path(), &file, with_rules(vec![crit.clone()]));
+    wait(&mut h, idle);
+    let mut s = crate::session::capture(&h.state().tabs[0]);
+    s.rules = Some(vec![crit.clone()]);
+    s.rule_set = Some("Persistence".into());
+    let json = serde_json::to_string(&s).unwrap();
+    assert!(json.contains("\"rule_set\":\"Persistence\""));
+    let back: crate::session::Session = serde_json::from_str(&json).unwrap();
+    h.state_mut().apply_session(&back);
+    h.run_steps(2);
+    let st = &h.state().settings;
+    assert_eq!(st.rule_set.as_deref(), Some("Persistence"));
+    assert_eq!(st.rule_sets["Persistence"], vec![crit]);
+}

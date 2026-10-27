@@ -54,6 +54,9 @@ pub struct Session {
     /// Groups start collapsed ("Collapse all").
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub groups_collapsed: bool,
+    /// Rule set the rules came from (absent before 0.5.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_set: Option<String>,
     /// Sorted by the `#` column: descending or not (absent before 0.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort_by_row: Option<bool>,
@@ -115,6 +118,7 @@ pub fn capture(tab: &Tab) -> Session {
             .map(|k| (name(k.col), k.desc))
             .collect(),
         sort_by_row: tab.sort.first().filter(|k| k.is_row()).map(|k| k.desc),
+        rule_set: None,
         filters: tab
             .filters
             .iter()

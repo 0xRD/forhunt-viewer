@@ -405,3 +405,22 @@ fn hide_grouped_columns_toggle() {
     h.run_steps(2);
     assert_eq!(h.state().tabs[0].order, vec![0, 1, 2, 3]);
 }
+
+/// Settings change how a new grouping starts (#18): open, by value.
+#[test]
+fn grouping_defaults_come_from_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    settle(&mut h);
+    h.state_mut().settings.group_collapsed = false;
+    h.state_mut().settings.group_sort = GroupSort::ValueAsc;
+    h.run_steps(2);
+    header_menu(&mut h, 1);
+    h.get_by_label("Group by this column").click();
+    settle(&mut h);
+    let t = &h.state().tabs[0];
+    assert_eq!(t.groups.levels[0].sort, GroupSort::ValueAsc);
+    assert_eq!(t.groups.lines.as_ref().unwrap().len(), 500 + 3, "all open");
+    assert_eq!(root_values(&h)[0].0, "Application");
+}

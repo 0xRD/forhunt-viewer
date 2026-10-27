@@ -189,11 +189,11 @@ fn ctrl_c_copies_a_2x3_block_as_tsv() {
     let text = copy(&mut h).expect("clipboard");
     assert_eq!(
         text,
-        "2024-03-11 10:00:01.0000000\t4625\tasmith\n2024-03-11 10:00:02.0000000\t4688\tSYSTEM"
+        "Time\tEventId\tUser\n2024-03-11 10:00:01.0000000\t4625\tasmith\n2024-03-11 10:00:02.0000000\t4688\tSYSTEM"
     );
     assert_eq!(
         h.state().tabs[0].status.as_deref(),
-        Some("copied 6 cells, no headers as TSV (tab-separated)")
+        Some("copied 6 cells with headers as TSV (tab-separated)")
     );
     // Ctrl+Shift+C still copies the active row as JSON.
     let m = Modifiers::COMMAND | Modifiers::SHIFT;
@@ -225,7 +225,7 @@ fn ctrl_c_copies_a_2x3_block_as_tsv() {
 }
 
 #[test]
-fn row_gutter_selects_rows_values_or_with_headers() {
+fn row_gutter_selects_rows_with_headers_or_values() {
     let dir = tempfile::tempdir().unwrap();
     let file = sample(dir.path());
     let mut h = harness(dir.path(), &file);
@@ -243,15 +243,16 @@ fn row_gutter_selects_rows_values_or_with_headers() {
     // The active cell is unchanged, the cell selection shrank to it (#24).
     assert_eq!(g.selected, Some(7));
     assert!(!g.cells.is_multi());
-    // Ctrl+C: values only (#28).
+    // Ctrl+C: with the header line (D-092).
     let text = copy(&mut h).expect("clipboard");
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 4);
+    assert_eq!(lines[0], "Time\tEventId\tUser\tMessage");
+    assert_eq!(lines.len(), 5);
     assert_eq!(
-        lines[3],
+        lines[4],
         "2024-03-11 10:00:05.0000000\t4688\tasmith\t\"msg 5, \"\"q\"\"\""
     );
-    // Ctrl+Alt+C: with the header line.
+    // Ctrl+Alt+C: values only.
     let m = Modifiers::COMMAND | Modifiers::ALT;
     h.input_mut().events.extend([
         egui::Event::ModifiersChanged(m),
@@ -273,10 +274,10 @@ fn row_gutter_selects_rows_values_or_with_headers() {
             egui::OutputCommand::CopyText(t) => Some(t.clone()),
             _ => None,
         })
-        .expect("with headers");
+        .expect("values only");
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines[0], "Time\tEventId\tUser\tMessage");
-    assert_eq!(lines.len(), 5);
+    assert_eq!(lines.len(), 4);
+    assert!(lines[0].starts_with("2024-03-11 10:00:00"));
     h.input_mut()
         .events
         .push(egui::Event::ModifiersChanged(Modifiers::NONE));
@@ -415,5 +416,28 @@ fn detail_pane_close_button_and_shortcut() {
         h.run_steps(2);
     }
     // Twice: closed -> open -> closed.
+    assert!(!h.state().settings.detail_pane);
+}
+
+/// Esc with the pointer over the detail pane closes it.
+#[test]
+fn esc_over_the_detail_pane_closes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    let p = cell(&h, 1, DC_FIRST);
+    click(&mut h, p, Modifiers::NONE);
+    // Esc over the grid does not close it.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().settings.detail_pane);
+    let r = h.get_by_label("Close detail pane").rect();
+    h.input_mut().events.push(egui::Event::PointerMoved(pos2(
+        r.center().x - 60.0,
+        r.center().y + 80.0,
+    )));
+    h.run_steps(1);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
     assert!(!h.state().settings.detail_pane);
 }
