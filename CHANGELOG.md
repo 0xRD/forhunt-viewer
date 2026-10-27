@@ -1,7 +1,8 @@
 # Changelog
 
-## 0.5.1 (unreleased)
+## 0.5.1 (2026-10-27)
 
+- Settings… moved from the View menu to the File menu.
 - Ctrl+C copies the column names with the values again (the default in
   0.5.0 was values only); Ctrl+Alt+C (Cmd+Option+C on macOS) copies the
   values only. *Copy as ▸* has "with headers" on by default. One cell is
@@ -11,7 +12,7 @@
   the Settings window, in a *Date formats* tab.
 - Esc with the pointer over the detail pane closes it (unless an operation
   is running: Esc cancels it first) (#30).
-- View > Settings: how new groupings start, collapsed or open and the
+- File > Settings: how new groupings start, collapsed or open and the
   order of their groups (default: collapsed, largest first) (#18).
 - Sessions record the coloring rule set they used; loading one makes it
   the active set, and adds it on a machine that does not have it (#20).

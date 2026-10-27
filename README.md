@@ -95,7 +95,7 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   order. *Copy with headers* (Ctrl+C) copies the column names, then the
   values; *Copy values* (Ctrl+Alt+C, Cmd+Option+C on macOS) leaves the
   names out. The default format is set in
-  View > Settings: **Markdown** (default since 0.5), TSV (pastes cell by
+  File > Settings: **Markdown** (default since 0.5), TSV (pastes cell by
   cell into Excel / LibreOffice / Google Sheets), CSV with `,` or `;`,
   JSON, JSONL or HTML. Without headers JSON / JSONL rows are arrays, a
   Markdown table gets an empty header row. **HTML** copies a table styled
@@ -207,7 +207,7 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   (`crates/fhv-app/assets/themes/`); your own go in `<config>/themes/*.json`
   (config = `~/Library/Application Support/forhunt-viewer` on macOS,
   `%APPDATA%\forhunt-viewer` on Windows, `~/.config/forhunt-viewer` on Linux).
-- **Settings** (View > Settings…): theme, grid font (bundled JetBrains Mono
+- **Settings** (File > Settings…): theme, grid font (bundled JetBrains Mono
   or Inter, any installed font, monospaced only by default, or a font file),
   grid font size 8-32 pt (rows follow), and a separate UI scale for menus,
   panels and dialogs, the default copy format, and whether new tabs hide

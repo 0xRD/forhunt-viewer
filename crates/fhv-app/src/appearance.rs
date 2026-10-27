@@ -1,5 +1,5 @@
 //! Appearance: theme (D-056), grid font and size, UI scale (D-057), the
-//! View > Settings dialog, and the repaint helpers of D-055.
+//! File > Settings dialog, and the repaint helpers of D-055.
 
 use std::sync::mpsc::{Receiver, channel};
 

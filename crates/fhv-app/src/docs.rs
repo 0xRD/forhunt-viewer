@@ -1,4 +1,4 @@
-//! Documentation shown in the app (View > Settings, *Documentation* tab):
+//! Documentation shown in the app (File > Settings, one tab per page):
 //! the Markdown files of `docs/`, embedded at build time and drawn by a
 //! small renderer (headings, paragraphs, bullets, tables, `code`,
 //! **bold**, *italics*, links as plain text). The app does not open a

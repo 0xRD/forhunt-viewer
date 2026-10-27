@@ -318,8 +318,8 @@ fn docs_open_in_the_settings_window() {
     assert!(a.settings_open);
     assert_eq!(a.settings_tab, Some(0));
     h.get_by_label_contains("Which date and time formats forhunt-viewer reads");
-    // View > Settings… opens the settings tab again.
-    h.get_by_label("View").click();
+    // File > Settings… opens the settings tab again.
+    h.get_by_label("File").click();
     h.run_steps(2);
     h.get_by_label("Settings…").click();
     h.run_steps(2);

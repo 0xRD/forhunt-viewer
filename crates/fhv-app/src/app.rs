@@ -621,6 +621,16 @@ impl App {
                 }
                 ui.separator();
                 if ui
+                    .button("Settings…")
+                    .on_hover_text("theme, grid font and size, UI scale, copy format, grouping")
+                    .clicked()
+                {
+                    ui.close();
+                    self.appearance.settings_open = true;
+                    self.appearance.settings_tab = None;
+                }
+                ui.separator();
+                if ui
                     .add_enabled(has, egui::Button::new("Close tab   Ctrl+W"))
                     .clicked()
                 {
@@ -644,11 +654,6 @@ impl App {
                 ui.menu_button("Theme", |ui| {
                     self.appearance.theme_picker(ui, &mut self.settings)
                 });
-                if ui.button("Settings…").on_hover_text("theme, grid font and size, UI scale").clicked() {
-                    ui.close();
-                    self.appearance.settings_open = true;
-                    self.appearance.settings_tab = None;
-                }
                 let key = ui
                     .ctx()
                     .format_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::D));
