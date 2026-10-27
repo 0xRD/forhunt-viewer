@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use eframe::egui;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 
@@ -275,4 +276,73 @@ fn duplicates_and_unique_values_are_highlighted() {
     let t = &h.state().tabs[0];
     assert!(rules::cell_tip(t, 0, 2).unwrap().contains("50 occurrences"));
     assert_eq!(t.dupes.header_mark(2), " [dup+uniq]");
+}
+
+/// Named rule sets (#20): save as, modified state, save, load, rename,
+/// delete; the View menu switches sets.
+#[test]
+fn rule_sets_save_load_rename_delete() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let crit = Rule {
+        when: "Info contains Critical".into(),
+        ..Rule::default()
+    };
+    let mut h = harness(dir.path(), &file, with_rules(vec![crit.clone()]));
+    wait(&mut h, idle);
+    h.state_mut().rules_dlg = Some(Default::default());
+    h.run_steps(2);
+    h.get_by_label_contains("changes are saved as you make them");
+    h.get_by_label("set name").focus();
+    h.run_steps(1);
+    h.get_by_label("set name").type_text("Logons");
+    h.run_steps(1);
+    h.get_by_label("Save as set").click();
+    h.run_steps(2);
+    let s = &h.state().settings;
+    assert_eq!(s.rule_set.as_deref(), Some("Logons"));
+    assert_eq!(s.rule_sets["Logons"], vec![crit.clone()]);
+    // Editing the rules marks the set modified; Save updates it.
+    h.state_mut().settings.coloring_rules[0].color = "blue".into();
+    h.run_steps(2);
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    assert_eq!(h.state().settings.rule_sets["Logons"][0].color, "blue");
+    // Another set, then load the first one back from the View menu.
+    h.state_mut().settings.coloring_rules = Vec::new();
+    h.state_mut().settings.rule_set = None;
+    h.state_mut()
+        .settings
+        .rule_sets
+        .insert("Empty".into(), Vec::new());
+    h.state_mut().rules_dlg = None;
+    h.run_steps(2);
+    h.get_by_label("View").click();
+    h.run_steps(2);
+    h.get_by_label("Rule set").hover();
+    h.run_steps(2);
+    h.get_by_label("Logons").click();
+    h.run_steps(2);
+    let s = &h.state().settings;
+    assert_eq!(s.rule_set.as_deref(), Some("Logons"));
+    assert_eq!(s.coloring_rules.len(), 1);
+    assert_eq!(h.state().rules.len(), 1, "tabs use the loaded set");
+    // Rename, then delete.
+    h.state_mut().rules_dlg = Some(Default::default());
+    h.run_steps(2);
+    h.get_by_label("set name").focus();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label("set name").type_text("Logon events");
+    h.run_steps(2);
+    h.get_by_label("Rename").click();
+    h.run_steps(2);
+    let s = &h.state().settings;
+    assert!(s.rule_sets.contains_key("Logon events") && !s.rule_sets.contains_key("Logons"));
+    assert_eq!(s.rule_set.as_deref(), Some("Logon events"));
+    h.get_by_label("Delete set").click();
+    h.run_steps(2);
+    let s = &h.state().settings;
+    assert!(!s.rule_sets.contains_key("Logon events"));
+    assert_eq!(s.coloring_rules.len(), 1, "the current rules stay");
 }

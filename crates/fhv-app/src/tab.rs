@@ -131,6 +131,8 @@ pub enum JobResult {
     Hits(RoaringBitmap),
     Exported(u64),
     Text(String, u64),
+    /// A copy of the selection, and its status line.
+    Clip(crate::copyfmt::Clip, String),
 }
 
 pub struct Job {
@@ -181,6 +183,10 @@ pub struct Tab {
     pub widths: HashMap<usize, f32>,
     /// Hidden column -> the visible column it followed (D-070).
     pub hidden_after: HashMap<usize, Option<usize>>,
+    /// Columns taken out of `order` because they are group levels and
+    /// "Hide grouped columns" is on, with the columns before them in the
+    /// layout at that time (#29): they go back after the last one shown.
+    pub group_hidden: HashMap<usize, Vec<usize>>,
     pub grid: GridState,
     pub(crate) rows: Rows,
     rows_key: Option<(u64, Range<u64>)>,
@@ -188,7 +194,7 @@ pub struct Tab {
     tz: tz::Display,
     last_query: Option<Query>,
     /// Text the app should put on the clipboard (from a background job).
-    pub clipboard: Option<String>,
+    pub clipboard: Option<crate::copyfmt::Clip>,
     bad: Option<Arc<RoaringBitmap>>,
     /// Search hits within the current view (recomputed when either changes).
     pub hits_in_view: Option<u64>,
@@ -219,7 +225,11 @@ pub struct Tab {
     slots: Vec<Option<u64>>,
     slots_first: u64,
     /// Status-bar count / sum of the cell selection it was computed for.
-    pub sel_stats: Option<(crate::selection::CellSel, Option<(u64, f64)>)>,
+    #[allow(clippy::type_complexity)]
+    pub sel_stats: Option<(
+        (crate::selection::CellSel, crate::selection::RowSet, bool),
+        Option<(u64, f64)>,
+    )>,
 }
 
 fn initial_width(name: &str) -> f32 {
@@ -305,6 +315,7 @@ impl Tab {
             order: (0..ncols).collect(),
             widths,
             hidden_after: HashMap::new(),
+            group_hidden: HashMap::new(),
             grid: GridState::default(),
             // The grid shows at most a few hundred characters of a cell.
             rows: {
@@ -830,7 +841,11 @@ impl Tab {
                         }
                         Ok(JobResult::Text(text, n)) => {
                             self.status = Some(format!("copied {n} values"));
-                            self.clipboard = Some(text);
+                            self.clipboard = Some(crate::copyfmt::Clip::text(text));
+                        }
+                        Ok(JobResult::Clip(clip, status)) => {
+                            self.status = Some(status);
+                            self.clipboard = Some(clip);
                         }
                         Ok(JobResult::Exported(n)) => {
                             self.status = Some(format!(
@@ -1048,8 +1063,58 @@ impl Tab {
             .filter(|&r| (r as u64) < self.table.row_count())
     }
 
+    /// Takes the group-level columns out of the display while "Hide
+    /// grouped columns" is on, and puts back the others at their place
+    /// (#29). Not the hidden-columns list: ungrouping shows them again.
+    pub fn sync_grouped_cols(&mut self) {
+        let want: Vec<usize> = if self.groups.hide_cols {
+            self.groups.levels.iter().map(|l| l.col).collect()
+        } else {
+            Vec::new()
+        };
+        let back: Vec<usize> = self
+            .group_hidden
+            .keys()
+            .copied()
+            .filter(|c| !want.contains(c))
+            .collect();
+        for c in back {
+            self.put_back(c);
+        }
+        for c in want {
+            if let Some(i) = self.order.iter().position(|&x| x == c) {
+                if DC_FIRST + i < self.grid.frozen {
+                    self.grid.frozen -= 1;
+                }
+                let layout = self.layout_order();
+                let at = layout.iter().position(|&x| x == c).unwrap_or(0);
+                self.group_hidden.insert(c, layout[..at].to_vec());
+                self.order.remove(i);
+            }
+        }
+    }
+
+    fn put_back(&mut self, c: usize) {
+        if let Some(before) = self.group_hidden.remove(&c) {
+            insert_after(&mut self.order, c, &before);
+        }
+    }
+
+    /// Display order with the columns hidden as group levels put back:
+    /// what sessions save.
+    pub fn layout_order(&self) -> Vec<usize> {
+        let mut order = self.order.clone();
+        let mut hidden: Vec<(&usize, &Vec<usize>)> = self.group_hidden.iter().collect();
+        hidden.sort_by_key(|(c, before)| (before.len(), **c));
+        for (&c, before) in hidden {
+            insert_after(&mut order, c, before);
+        }
+        order
+    }
+
     /// Syncs grid widths from the per-column widths.
     pub fn sync_widths(&mut self) {
+        self.sync_grouped_cols();
         if self.grid.sel_cols != self.order {
             self.grid.sel_cols = self.order.clone();
             self.grid.clear_ranges();
@@ -1285,6 +1350,12 @@ impl GridSource for TabSource<'_> {
     }
 
     fn header_suffix(&self, col: usize) -> String {
+        if col == DC_NUM {
+            return match self.tab.sort.first() {
+                Some(k) if k.is_row() => if k.desc { " ↓" } else { " ↑" }.into(),
+                _ => String::new(),
+            };
+        }
         let Some(c) = self.tab.file_col(col) else {
             return String::new();
         };
@@ -1471,4 +1542,17 @@ impl TabSource<'_> {
             .slots
             .get(line.checked_sub(self.tab.slots_first)? as usize)?
     }
+}
+
+/// Inserts `c` after the last of `before` in `order` (first if none).
+fn insert_after(order: &mut Vec<usize>, c: usize, before: &[usize]) {
+    if order.contains(&c) {
+        return;
+    }
+    let at = before
+        .iter()
+        .rev()
+        .find_map(|p| order.iter().position(|x| x == p))
+        .map_or(0, |i| i + 1);
+    order.insert(at, c);
 }

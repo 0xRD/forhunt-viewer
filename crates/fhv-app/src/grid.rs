@@ -121,6 +121,30 @@ struct Drag {
     moved: bool,
 }
 
+/// A cell selection takes over: the selected rows go (#24). Macros, not
+/// methods: closures of the grid hold other fields of the state.
+macro_rules! cells_mode {
+    ($s:expr) => {{
+        $s.rows.clear();
+        $s.rows_active = false;
+    }};
+}
+
+/// A row selection takes over: the cells shrink to the active cell, and
+/// rows selected earlier go unless rows were the last selection.
+macro_rules! rows_mode {
+    ($s:expr) => {{
+        if !$s.rows_active {
+            $s.rows.clear();
+        }
+        $s.rows_active = true;
+        match $s.selected {
+            Some(r) => $s.cells.set((r, $s.selected_col)),
+            None => $s.cells.clear(),
+        }
+    }};
+}
+
 impl GridState {
     /// Drops the ranges and row selection, keeping the active cell.
     pub fn clear_ranges(&mut self) {
@@ -369,8 +393,8 @@ pub fn show(
         let all = ui
             .input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::A)));
         if all && n > 0 {
+            cells_mode!(state);
             state.cells.select_all(n, ncols);
-            state.rows_active = false;
             if let Some((r, c)) = state.cells.anchor {
                 resp.selection_changed |= state.selected != Some(r);
                 (state.selected, state.selected_col) = (Some(r), c);
@@ -452,10 +476,18 @@ pub fn show(
         let new = sel.map(|s| s as u64);
         match new {
             Some(r) if new != from.map(|p| p.0) || col != from_col => {
-                if shift && state.selected.is_some() {
+                let rows_mode = state.rows_active && !state.rows.set.is_empty();
+                if shift && rows_mode {
+                    // Shift+arrows extend the kind of selection in use.
+                    state.rows.press(r, false, true);
+                    resp.selection_changed |= new != state.selected;
+                    (state.selected, state.selected_col) = (new, col);
+                    state.cells.set((r, col));
+                } else if shift && state.selected.is_some() {
+                    cells_mode!(state);
                     state.cells.extend((r, col));
-                    state.rows_active = false;
                 } else {
+                    cells_mode!(state);
                     resp.selection_changed |= new != state.selected;
                     (state.selected, state.selected_col) = (new, col);
                     state.cells.set((r, col));
@@ -550,8 +582,9 @@ pub fn show(
     state.col_x = xs.clone();
     state.header_y = full.min.y + st.header_h / 2.0;
     // Clip of a column: frozen columns over the left part, others right of it.
+    let frozen = state.frozen;
     let clip_for = |c: usize, r: Rect| -> Rect {
-        let area = if c < state.frozen {
+        let area = if c < frozen {
             Rect::from_min_max(pos2(body.min.x, r.min.y), pos2(body.max.x, r.max.y))
         } else {
             Rect::from_min_max(pos2(frozen_end, r.min.y), pos2(body.max.x, r.max.y))
@@ -569,8 +602,8 @@ pub fn show(
             .interact(hg, id.with("select_all_rows"), Sense::click())
             .on_hover_text("select / deselect all rows");
         if ha.clicked() {
+            rows_mode!(state);
             state.rows.toggle_all(n);
-            state.rows_active = true;
         }
         let bx = Rect::from_center_size(hg.center(), vec2(7.0, 7.0));
         let some = !state.rows.set.is_empty();
@@ -645,14 +678,29 @@ pub fn show(
         if hr.hovered() {
             painter.rect_filled(clip, 0.0, visuals.widgets.hovered.weak_bg_fill);
         }
-        let p = painter.with_clip_rect(clip.shrink2(vec2(2.0, 0.0)));
-        p.text(
-            pos2(r.min.x + st.pad, r.center().y),
-            Align2::LEFT_CENTER,
-            format!("{}{}", src.column_name(c), src.header_suffix(c)),
-            FontId::proportional(13.0),
-            visuals.strong_text_color(),
-        );
+        // Marks (sort arrow, filter...) stay visible: in a narrow column
+        // they sit at the right edge and the name is cut (#22).
+        let font = FontId::proportional(13.0);
+        let color = visuals.strong_text_color();
+        let suffix = src.header_suffix(c);
+        let name = painter.layout_no_wrap(src.column_name(c).to_string(), font.clone(), color);
+        let marks = painter.layout_no_wrap(suffix.clone(), font.clone(), color);
+        let room = r.width() - 2.0 * st.pad;
+        let y = r.center().y - name.size().y / 2.0;
+        let name_clip = if name.size().x + marks.size().x > room && !suffix.is_empty() {
+            let mx = r.max.x - st.pad - marks.size().x;
+            painter
+                .with_clip_rect(clip.shrink2(vec2(2.0, 0.0)))
+                .galley(pos2(mx, y), marks, color);
+            Rect::from_min_max(clip.min, pos2(mx.min(clip.max.x), clip.max.y))
+        } else {
+            let p = painter.with_clip_rect(clip.shrink2(vec2(2.0, 0.0)));
+            p.galley(pos2(r.min.x + st.pad + name.size().x, y), marks, color);
+            clip
+        };
+        painter
+            .with_clip_rect(name_clip.shrink2(vec2(2.0, 0.0)).intersect(clip))
+            .galley(pos2(r.min.x + st.pad, y), name, color);
         painter.line_segment(
             [pos2(x1 - 0.5, r.min.y + 3.0), pos2(x1 - 0.5, r.max.y - 3.0)],
             sep,
@@ -720,11 +768,13 @@ pub fn show(
         if outer.hovered()
             && let Some(cell) = hit(p)
         {
-            state.rows_active = false;
-            if mods.shift && state.selected.is_some() {
+            // Modifiers combine within one kind of selection only.
+            let was_rows = state.rows_active && !state.rows.set.is_empty();
+            cells_mode!(state);
+            if mods.shift && state.selected.is_some() && !was_rows {
                 state.cells.extend(cell);
             } else {
-                if mods.command {
+                if mods.command && !was_rows {
                     state.cells.toggle(cell);
                 } else {
                     state.cells.set(cell);
@@ -741,8 +791,8 @@ pub fn show(
             ui.ctx().request_repaint();
         } else if gutter_resp.hovered() && gutter.contains(p) && row_at(p.y) < n {
             let row = row_at(p.y);
+            rows_mode!(state);
             state.rows.press(row, mods.command, mods.shift);
-            state.rows_active = true;
             state.drag = Some(Drag {
                 rows: true,
                 from: (row, 0),
@@ -784,9 +834,17 @@ pub fn show(
     let (range_fill, range_line) = (th.range_fill.0, th.range_outline.0);
     let gutter_p = painter.with_clip_rect(gutter);
     let gutter_hover = gutter_resp.hover_pos().map(|p| row_at(p.y));
+    // Vertical spans of data rows: column lines skip group headers (#17).
+    let mut spans: Vec<(f32, f32)> = Vec::new();
     for k in 0..count {
         let row = first + k;
         let y = body.min.y - offset + k as f32 * st.row_h;
+        if src.group_row(row).is_none() {
+            match spans.last_mut() {
+                Some(s) if s.1 >= y - 0.01 => s.1 = y + st.row_h,
+                _ => spans.push((y, y + st.row_h)),
+            }
+        }
         let rr = Rect::from_min_size(pos2(body.min.x, y), vec2(body.width(), st.row_h));
         let row_sel = state.rows.set.contains(row);
         let gr = Rect::from_min_max(pos2(gutter.min.x, y), pos2(gutter.max.x, y + st.row_h));
@@ -921,24 +979,33 @@ pub fn show(
             }
         }
     }
-    // Column separators over the body, and the frozen edge.
+    // Column separators over the data rows (not across group headers, #17),
+    // and the frozen edge.
+    // Below the last row the empty area keeps its lines.
+    let end = body.min.y - offset + count as f32 * st.row_h;
+    if end < body.max.y {
+        spans.push((end, body.max.y));
+    }
     for (c, &(_, x1)) in xs.iter().enumerate() {
         let clip = clip_for(
             c,
             Rect::from_min_max(pos2(x1 - 1.0, body.min.y), pos2(x1, body.max.y)),
         );
         if clip.width() > 0.0 {
-            body_p.line_segment(
-                [pos2(x1 - 0.5, body.min.y), pos2(x1 - 0.5, body.max.y)],
-                grid_line,
-            );
+            for &(y0, y1) in &spans {
+                body_p.line_segment([pos2(x1 - 0.5, y0), pos2(x1 - 0.5, y1)], grid_line);
+            }
         }
     }
     if state.frozen > 0 {
+        let edge = Stroke::new(2.0, th.accent.0);
         body_p.line_segment(
-            [pos2(frozen_end, full.min.y), pos2(frozen_end, body.max.y)],
-            Stroke::new(2.0, th.accent.0),
+            [pos2(frozen_end, full.min.y), pos2(frozen_end, body.min.y)],
+            edge,
         );
+        for &(y0, y1) in &spans {
+            body_p.line_segment([pos2(frozen_end, y0), pos2(frozen_end, y1)], edge);
+        }
     }
 
     // Column drag: drop indicator, ghost of the header, edge auto-scroll.
@@ -1022,7 +1089,7 @@ pub fn show(
         && let Some((row, col)) = hit(p)
     {
         if outer.secondary_clicked() && !(state.rows_active && state.rows.set.contains(row)) {
-            state.rows_active = false;
+            cells_mode!(state);
             if !state.cells.contains((row, col)) {
                 state.cells.set((row, col));
                 resp.selection_changed |= state.selected != Some(row);

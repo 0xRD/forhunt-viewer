@@ -37,6 +37,8 @@ pub struct GroupState {
     pub lines: Option<Arc<Lines>>,
     /// Groups start collapsed (Collapse all) instead of open.
     pub collapsed: bool,
+    /// The group-level columns are left out of the grid (#29).
+    pub hide_cols: bool,
     /// Groups whose state differs from `collapsed`, by path hash.
     pub flipped: HashSet<u64>,
     /// Why the levels are not applied (too many groups...).
@@ -374,6 +376,11 @@ pub fn bar(ui: &mut Ui, t: &mut Tab) {
             }
         }
         ui.separator();
+        ui.checkbox(&mut t.groups.hide_cols, "Hide grouped columns")
+            .on_hover_text(
+                "leave the grouped columns out of the grid (and of copy and export of the \
+             visible columns); they come back when the grouping is removed",
+            );
         if ui.button("Expand all").clicked() {
             act = Some(Action::All(true));
         }
@@ -417,11 +424,15 @@ pub fn apply(t: &mut Tab, a: Action) {
     let g = &mut t.groups;
     let regroup = match a {
         Action::Add(c) => {
+            // A new level starts from the overview: every group collapsed,
+            // largest first (#18). Sessions restore their own state.
             if g.level_of(c).is_none() {
                 g.levels.push(Level {
                     col: c,
-                    sort: GroupSort::default(),
+                    sort: GroupSort::CountDesc,
                 });
+                g.collapsed = true;
+                g.flipped.clear();
             }
             true
         }

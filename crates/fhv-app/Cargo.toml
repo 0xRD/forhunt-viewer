@@ -27,6 +27,8 @@ rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "w
 # eframe's system font fallback.
 fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"] }
 skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
+# HTML copies (#25): already in the tree through eframe's clipboard.
+arboard = { version = "3.7", default-features = false }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-bundle-platform", "tzdb-zoneinfo"] }
 
 [dev-dependencies]

@@ -35,7 +35,11 @@ fn harness(dir: &Path, file: &Path) -> Harness<'static, App> {
     let mut h = Harness::builder()
         .with_size([1400.0, 800.0])
         .build_eframe(move |cc| {
-            App::with(cc, vec![file.clone()], Settings::default(), cache.clone())
+            let settings = Settings {
+                copy_format: crate::copyfmt::Format::Tsv,
+                ..Settings::default()
+            };
+            App::with(cc, vec![file.clone()], settings, cache.clone())
         });
     let t0 = Instant::now();
     while !{
@@ -187,7 +191,10 @@ fn ctrl_c_copies_a_2x3_block_as_tsv() {
         text,
         "2024-03-11 10:00:01.0000000\t4625\tasmith\n2024-03-11 10:00:02.0000000\t4688\tSYSTEM"
     );
-    assert!(h.state().tabs[0].status.as_deref() == Some("copied 6 cells"));
+    assert_eq!(
+        h.state().tabs[0].status.as_deref(),
+        Some("copied 6 cells, no headers as TSV (tab-separated)")
+    );
     // Ctrl+Shift+C still copies the active row as JSON.
     let m = Modifiers::COMMAND | Modifiers::SHIFT;
     h.input_mut().events.extend([
@@ -218,7 +225,7 @@ fn ctrl_c_copies_a_2x3_block_as_tsv() {
 }
 
 #[test]
-fn row_gutter_selects_rows_and_copies_them_with_headers() {
+fn row_gutter_selects_rows_values_or_with_headers() {
     let dir = tempfile::tempdir().unwrap();
     let file = sample(dir.path());
     let mut h = harness(dir.path(), &file);
@@ -233,20 +240,52 @@ fn row_gutter_selects_rows_and_copies_them_with_headers() {
     let g = &h.state().tabs[0].grid;
     assert!(g.rows_active);
     assert_eq!(g.rows.set.ranges(), [0..3, 5..6]);
-    // The active cell is unchanged: row and cell selections are separate.
+    // The active cell is unchanged, the cell selection shrank to it (#24).
     assert_eq!(g.selected, Some(7));
+    assert!(!g.cells.is_multi());
+    // Ctrl+C: values only (#28).
     let text = copy(&mut h).expect("clipboard");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 4);
+    assert_eq!(
+        lines[3],
+        "2024-03-11 10:00:05.0000000\t4688\tasmith\t\"msg 5, \"\"q\"\"\""
+    );
+    // Ctrl+Alt+C: with the header line.
+    let m = Modifiers::COMMAND | Modifiers::ALT;
+    h.input_mut().events.extend([
+        egui::Event::ModifiersChanged(m),
+        egui::Event::Key {
+            key: egui::Key::C,
+            pressed: true,
+            modifiers: m,
+            repeat: false,
+            physical_key: None,
+        },
+    ]);
+    h.step();
+    let text = h
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .find_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t.clone()),
+            _ => None,
+        })
+        .expect("with headers");
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines[0], "Time\tEventId\tUser\tMessage");
     assert_eq!(lines.len(), 5);
-    assert_eq!(
-        lines[4],
-        "2024-03-11 10:00:05.0000000\t4688\tasmith\t\"msg 5, \"\"q\"\"\""
-    );
-    // A click on a cell makes the cells the selection again.
+    h.input_mut()
+        .events
+        .push(egui::Event::ModifiersChanged(Modifiers::NONE));
+    // A click on a cell makes the cells the selection again, and drops
+    // the selected rows (#24).
     let p = cell(&h, 1, DC_FIRST + 1);
     click(&mut h, p, Modifiers::NONE);
     assert!(!h.state().tabs[0].grid.rows_active);
+    assert!(h.state().tabs[0].grid.rows.set.is_empty());
     assert_eq!(copy(&mut h).as_deref(), Some("4625"));
     // The gutter header selects all rows; tagging them tags the view.
     let t = &h.state().tabs[0].grid;
@@ -285,4 +324,96 @@ fn detail_pane_highlights_the_active_cells_field() {
     h.step();
     assert_eq!(h.state().detail_hl, Some((3, 2)));
     assert_eq!(h.state().tabs[0].grid.selected_col, DC_FIRST + 1);
+}
+
+/// The `#` header sorts by row number: ascending (no sort job), then
+/// descending (a reverse), then off (#23); sessions keep it.
+#[test]
+fn hash_header_sorts_by_row_number() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    let hdr = |h: &Harness<'static, App>| {
+        let g = &h.state().tabs[0].grid;
+        let (x0, x1) = g.col_x[crate::tab::DC_NUM];
+        pos2((x0 + x1) / 2.0, g.header_y)
+    };
+    let settle = |h: &mut Harness<'static, App>| {
+        let t0 = Instant::now();
+        loop {
+            h.step();
+            let t = &h.state().tabs[0];
+            if t.job.is_none() && t.view_query_for_test() == Some(&t.query()) {
+                break;
+            }
+            assert!(t0.elapsed() < Duration::from_secs(20), "timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        h.step();
+    };
+    let p = hdr(&h);
+    click(&mut h, p, Modifiers::NONE);
+    settle(&mut h);
+    let t = &h.state().tabs[0];
+    assert_eq!(t.sort, vec![fhv_engine::SortKey::row(false)]);
+    assert!(t.view.order.is_none());
+    click(&mut h, p, Modifiers::NONE);
+    settle(&mut h);
+    let t = &h.state().tabs[0];
+    assert_eq!(t.sort, vec![fhv_engine::SortKey::row(true)]);
+    assert_eq!(t.row_at(0), Some(999));
+    let s = crate::session::capture(t);
+    assert_eq!(s.sort_by_row, Some(true));
+    assert!(s.sort.is_empty());
+    click(&mut h, p, Modifiers::NONE);
+    settle(&mut h);
+    assert!(h.state().tabs[0].sort.is_empty());
+    assert_eq!(h.state().tabs[0].row_at(0), Some(0));
+    crate::session::apply(&mut h.state_mut().tabs[0], &s);
+    settle(&mut h);
+    assert_eq!(h.state().tabs[0].row_at(0), Some(999));
+    // Another column's header replaces it.
+    let g = &h.state().tabs[0].grid;
+    let (x0, x1) = g.col_x[DC_FIRST + 1];
+    let q = pos2((x0 + x1) / 2.0, g.header_y);
+    click(&mut h, q, Modifiers::SHIFT);
+    settle(&mut h);
+    let t = &h.state().tabs[0];
+    assert_eq!(
+        t.sort,
+        vec![fhv_engine::SortKey {
+            col: 1,
+            desc: false
+        }]
+    );
+}
+
+/// Ctrl+D and the pane's × close the detail pane (#30).
+#[test]
+fn detail_pane_close_button_and_shortcut() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    let p = cell(&h, 1, DC_FIRST);
+    click(&mut h, p, Modifiers::NONE);
+    assert!(h.state().settings.detail_pane);
+    h.get_by_label("Close detail pane").click();
+    h.run_steps(2);
+    assert!(!h.state().settings.detail_pane);
+    let m = Modifiers::COMMAND;
+    for _ in 0..2 {
+        h.input_mut().events.extend([
+            egui::Event::ModifiersChanged(m),
+            egui::Event::Key {
+                key: egui::Key::D,
+                pressed: true,
+                modifiers: m,
+                repeat: false,
+                physical_key: None,
+            },
+        ]);
+        h.run_steps(2);
+    }
+    // Twice: closed -> open -> closed.
+    assert!(!h.state().settings.detail_pane);
 }

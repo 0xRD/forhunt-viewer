@@ -127,13 +127,41 @@ fn root_values(h: &Harness<'static, App>) -> Vec<(String, u64)> {
         .collect()
 }
 
+/// Groups by Channel then EventId, checks the defaults of a new grouping
+/// (#18: collapsed, largest first), then sorts by value and opens all
+/// groups for the tests below.
 fn group_two_levels(h: &mut Harness<'static, App>) {
     header_menu(h, 1);
     h.get_by_label("Group by this column").click();
     settle(h);
+    {
+        let t = &h.state().tabs[0];
+        assert_eq!(t.groups.levels[0].sort, GroupSort::CountDesc);
+        assert_eq!(t.groups.lines.as_ref().unwrap().len(), 3, "all collapsed");
+        assert_eq!(root_values(h)[0], ("Security".into(), 250));
+    }
+    // Open one group: adding a level collapses everything again.
+    h.state_mut().tabs[0].groups.set_open(0, Some(true));
+    h.state_mut().tabs[0].groups.rebuild();
     header_menu(h, 2);
     h.get_by_label("Group by this column (inner level)").click();
     settle(h);
+    {
+        let t = &h.state().tabs[0];
+        assert!(
+            t.groups
+                .levels
+                .iter()
+                .all(|l| l.sort == GroupSort::CountDesc)
+        );
+        assert_eq!(t.groups.lines.as_ref().unwrap().len(), 3, "all collapsed");
+    }
+    let t = &mut h.state_mut().tabs[0];
+    crate::groups::apply(t, crate::groups::Action::Sort(0, GroupSort::ValueAsc));
+    crate::groups::apply(t, crate::groups::Action::Sort(1, GroupSort::ValueAsc));
+    settle(h);
+    crate::groups::apply(&mut h.state_mut().tabs[0], crate::groups::Action::All(true));
+    h.run_steps(2);
 }
 
 #[test]
@@ -249,9 +277,11 @@ fn collapse_keys_menu_filter_copy_and_session() {
             Some(crate::copyfmt::Format::Tsv),
             Default::default(),
             ',',
-            Some(false),
+            false,
+            &Default::default(),
         )
-        .expect("copied");
+        .expect("copied")
+        .text;
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2, "{text}");
         assert!(lines.iter().all(|l| l.contains("Application")));
@@ -328,4 +358,50 @@ fn collapse_keys_menu_filter_copy_and_session() {
     settle(&mut h);
     assert_eq!(h.state().tabs[0].groups.levels.len(), 2);
     assert!(h.state().tabs[0].groups.tree.is_some());
+}
+
+/// "Hide grouped columns" (#29): the grouped columns leave the grid while
+/// they are levels, come back at their place, and sessions keep both the
+/// toggle and the full column layout.
+#[test]
+fn hide_grouped_columns_toggle() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = sample(dir.path());
+    let mut h = harness(dir.path(), &file);
+    settle(&mut h);
+    group_two_levels(&mut h);
+    assert!(!h.state().tabs[0].groups.hide_cols, "off by default");
+    assert_eq!(h.state().tabs[0].order, vec![0, 1, 2, 3]);
+    h.get_by_label("Hide grouped columns").click();
+    h.run_steps(2);
+    let t = &h.state().tabs[0];
+    assert_eq!(t.order, vec![0, 3]);
+    assert!(t.hidden_after.is_empty(), "not the hidden-columns list");
+    assert_eq!(t.layout_order(), vec![0, 1, 2, 3]);
+    // The session keeps every column and the toggle.
+    let s = crate::session::capture(t);
+    assert_eq!(s.columns.len(), 4);
+    assert!(s.hide_grouped);
+    // Removing the inner level brings EventId back at its place.
+    crate::groups::apply(&mut h.state_mut().tabs[0], crate::groups::Action::Remove(1));
+    settle(&mut h);
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[0].order, vec![0, 2, 3]);
+    // Toggle off: all back.
+    h.get_by_label("Hide grouped columns").click();
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[0].order, vec![0, 1, 2, 3]);
+    // Restoring the session hides both levels again.
+    let w = crate::session::apply(&mut h.state_mut().tabs[0], &s);
+    assert!(w.is_empty(), "{w:?}");
+    settle(&mut h);
+    h.run_steps(2);
+    let t = &h.state().tabs[0];
+    assert!(t.groups.hide_cols);
+    assert_eq!(t.order, vec![0, 3]);
+    // Ungrouping shows them again.
+    crate::groups::apply(&mut h.state_mut().tabs[0], crate::groups::Action::Clear);
+    settle(&mut h);
+    h.run_steps(2);
+    assert_eq!(h.state().tabs[0].order, vec![0, 1, 2, 3]);
 }

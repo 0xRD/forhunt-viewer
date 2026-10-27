@@ -480,3 +480,46 @@ fn date_order_override_and_unparsable_counts() {
     e.set_kind(0, None);
     assert_ne!(rows(&fx, 0, between), march);
 }
+
+/// Sort by row number (#23): ascending is file order without a sort,
+/// descending its reverse, also on a filtered view; keys after it are
+/// ignored.
+#[test]
+fn row_number_sort() {
+    let fx = open("a,b\n3,x\n1,y\n2,x\n5,y\n4,x\n");
+    let run = |filter: Option<Expr>, sort: Vec<fhv_engine::SortKey>| {
+        let v =
+            fhv_engine::view::run(&fx.engine, &fhv_engine::view::Query { filter, sort }).unwrap();
+        v.iter().collect::<Vec<u32>>()
+    };
+    use fhv_engine::SortKey;
+    let asc = fhv_engine::view::run(
+        &fx.engine,
+        &fhv_engine::view::Query {
+            filter: None,
+            sort: vec![SortKey::row(false)],
+        },
+    )
+    .unwrap();
+    assert!(asc.order.is_none(), "ascending must not build an order");
+    assert_eq!(run(None, vec![SortKey::row(false)]), vec![0, 1, 2, 3, 4]);
+    assert_eq!(run(None, vec![SortKey::row(true)]), vec![4, 3, 2, 1, 0]);
+    let x = Some(Expr::Pred(Pred {
+        target: Target::Column(1),
+        op: Op::Equals("x".into()),
+        case_sensitive: true,
+    }));
+    assert_eq!(run(x, vec![SortKey::row(true)]), vec![4, 2, 0]);
+    let key = SortKey {
+        col: 0,
+        desc: false,
+    };
+    assert_eq!(
+        run(None, vec![SortKey::row(true), key]),
+        vec![4, 3, 2, 1, 0]
+    );
+    assert_eq!(
+        run(None, vec![key, SortKey::row(true)]),
+        vec![1, 2, 0, 4, 3]
+    );
+}

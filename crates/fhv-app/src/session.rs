@@ -54,6 +54,12 @@ pub struct Session {
     /// Groups start collapsed ("Collapse all").
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub groups_collapsed: bool,
+    /// Sorted by the `#` column: descending or not (absent before 0.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_by_row: Option<bool>,
+    /// "Hide grouped columns" (absent before 0.5).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_grouped: bool,
 }
 
 /// A column kind set by the analyst as text: a date format spec
@@ -97,12 +103,18 @@ pub fn capture(tab: &Tab) -> Session {
         file: tab.path.clone(),
         file_len: tab.table.file_len,
         columns: tab
-            .order
+            .layout_order()
             .iter()
             .map(|&c| (name(c), *tab.widths.get(&c).unwrap_or(&150.0)))
             .collect(),
         frozen: tab.grid.frozen,
-        sort: tab.sort.iter().map(|k| (name(k.col), k.desc)).collect(),
+        sort: tab
+            .sort
+            .iter()
+            .filter(|k| !k.is_row())
+            .map(|k| (name(k.col), k.desc))
+            .collect(),
+        sort_by_row: tab.sort.first().filter(|k| k.is_row()).map(|k| k.desc),
         filters: tab
             .filters
             .iter()
@@ -144,6 +156,7 @@ pub fn capture(tab: &Tab) -> Session {
             .map(|l| (name(l.col), l.sort))
             .collect(),
         groups_collapsed: tab.groups.collapsed,
+        hide_grouped: tab.groups.hide_cols,
     }
 }
 
@@ -170,6 +183,7 @@ pub fn apply(tab: &mut Tab, s: &Session) -> Vec<String> {
     }
     if !order.is_empty() {
         tab.order = order;
+        tab.group_hidden.clear();
     }
     tab.grid.frozen = s.frozen.min(tab.display_count());
     tab.sort = s
@@ -177,6 +191,9 @@ pub fn apply(tab: &mut Tab, s: &Session) -> Vec<String> {
         .iter()
         .filter_map(|(n, d)| find(n).map(|col| fhv_engine::SortKey { col, desc: *d }))
         .collect();
+    if let Some(desc) = s.sort_by_row {
+        tab.sort = vec![fhv_engine::SortKey::row(desc)];
+    }
     for f in tab.filters.iter_mut() {
         *f = ColFilter::default();
     }
@@ -247,6 +264,7 @@ pub fn apply(tab: &mut Tab, s: &Session) -> Vec<String> {
         }
     }
     tab.groups.collapsed = s.groups_collapsed;
+    tab.groups.hide_cols = s.hide_grouped;
     tab.groups.flipped.clear();
     tab.repaint_cells();
     tab.requery();

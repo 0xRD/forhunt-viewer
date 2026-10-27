@@ -139,6 +139,45 @@ impl DateFmtDlg {
     }
 }
 
+/// The date-format documentation (linked from the dialog and the Help
+/// menu).
+pub const DOCS_URL: &str =
+    "https://github.com/0xRD/forhunt-viewer/blob/master/docs/DATE-FORMATS.md";
+
+/// What each mode does, under the mode buttons (#19).
+fn mode_help(m: Mode) -> &'static str {
+    match m {
+        Mode::Auto => {
+            "Auto: the format detected from the values (ISO 8601, numeric d/M or M/d, \
+             month names, syslog, epochs...). Keep it unless the preview shows values \
+             that are not dates."
+        }
+        Mode::NotDate => {
+            "Not a date: the column is read as text, or numbers if it holds numbers \
+             (no date filters or date sort). For ids or counters taken for epochs."
+        }
+        Mode::Preset => {
+            "Preset: a known shape, e.g. an epoch unit the header does not name \
+             (Excel serial, Cocoa, Unix days) or another one than detected."
+        }
+        Mode::Custom => {
+            "Custom: a strftime pattern matched against the whole cell, for any \
+             layout the presets miss (two-digit years, odd separators)."
+        }
+    }
+}
+
+/// Examples of custom patterns: (cell, pattern).
+const EXAMPLES: [(&str, &str); 4] = [
+    ("01/03/24 14:05", "%d/%m/%y %H:%M"),
+    ("2024.03.01-14h05m09", "%Y.%m.%d-%Hh%Mm%S"),
+    (
+        "Mar 1 2024 2:05:09.123 PM +0100",
+        "%b %d %Y %I:%M:%S%.f %p %z",
+    ),
+    ("2024-061 14:05", "%Y-%j %H:%M"),
+];
+
 /// The dialog; returns false when it is closed (applied or cancelled).
 pub fn show(dlg: &mut DateFmtDlg, t: &mut Tab, ctx: &egui::Context) -> bool {
     let mut open = true;
@@ -161,6 +200,7 @@ pub fn show(dlg: &mut DateFmtDlg, t: &mut Tab, ctx: &egui::Context) -> bool {
                 ui.radio_value(&mut dlg.mode, Mode::Preset, "Preset");
                 ui.radio_value(&mut dlg.mode, Mode::Custom, "Custom format");
             });
+            ui.label(RichText::new(mode_help(dlg.mode)).small().weak());
             if dlg.mode == Mode::Preset {
                 egui::ComboBox::from_id_salt(("date-preset", dlg.col))
                     .width(380.0)
@@ -185,6 +225,42 @@ pub fn show(dlg: &mut DateFmtDlg, t: &mut Tab, ctx: &egui::Context) -> bool {
                     .small()
                     .weak(),
                 );
+                egui::CollapsingHeader::new("Cheat sheet and examples")
+                    .id_salt(("date-cheat", dlg.col))
+                    .show(ui, |ui| {
+                        egui::Grid::new(("date-specs", dlg.col))
+                            .num_columns(2)
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for (k, v) in [
+                                    ("%Y  %y", "year 2024; two digits 24 (00-69 = 20xx)"),
+                                    ("%m  %b  %B", "month 03; Mar / mars; March"),
+                                    ("%d  %e", "day 01; day with a leading space"),
+                                    ("%j", "day of the year 1-366"),
+                                    ("%H  %I  %p", "hour 0-23; hour 1-12 with AM / PM"),
+                                    ("%M  %S", "minute, second"),
+                                    ("%f  %.f  %3f", "fraction digits; optional .123; exactly 3"),
+                                    ("%z  %Z", "+01:00 / +0100 / Z; UTC, GMT, CET..."),
+                                    ("%a", "weekday name (ignored)"),
+                                    ("%s", "Unix seconds"),
+                                    ("%T  %F", "%H:%M:%S; %Y-%m-%d"),
+                                ] {
+                                    ui.monospace(k);
+                                    ui.label(v);
+                                    ui.end_row();
+                                }
+                            });
+                        ui.label(RichText::new("Examples (click to use)").strong());
+                        for (cell, pat) in EXAMPLES {
+                            ui.horizontal(|ui| {
+                                ui.monospace(cell);
+                                ui.label("→");
+                                if ui.link(RichText::new(pat).monospace()).clicked() {
+                                    dlg.pattern = pat.to_string();
+                                }
+                            });
+                        }
+                    });
             }
             if dlg.mode != Mode::NotDate {
                 egui::Grid::new(("date-opts", dlg.col))
@@ -197,14 +273,25 @@ pub fn show(dlg: &mut DateFmtDlg, t: &mut Tab, ctx: &egui::Context) -> bool {
                             ui.radio_value(&mut dlg.order, Order::Mdy, "month first");
                         });
                         ui.end_row();
-                        ui.label("Zone of times without offset");
+                        ui.label("Zone of times without offset").on_hover_text(
+                            "the zone the file's times were written in when they carry no \
+                             offset (Z, +02:00): UTC, an IANA name with DST (Europe/Paris) or \
+                             a fixed offset (+05:30). Times with an offset and epochs are \
+                             never shifted. Not the display zone (View > Time zone), which only \
+                             changes how times are shown",
+                        );
                         ui.add(
                             egui::TextEdit::singleline(&mut dlg.zone)
                                 .hint_text("UTC, Europe/Paris, +02:00")
                                 .desired_width(200.0),
                         );
                         ui.end_row();
-                        ui.label("Year of dates without one");
+                        ui.label("Year of dates without one").on_hover_text(
+                            "syslog (Mar  1 12:34:56) and logcat (03-01 12:34:56) write no \
+                             year: by default it is the year of the file's last change, the \
+                             months after that change going to the year before; the header \
+                             then shows (year?). Set it here when you know it",
+                        );
                         ui.add(
                             egui::TextEdit::singleline(&mut dlg.year)
                                 .hint_text("e.g. 2024")
@@ -229,6 +316,7 @@ pub fn show(dlg: &mut DateFmtDlg, t: &mut Tab, ctx: &egui::Context) -> bool {
                     .add_enabled(kind.is_ok(), egui::Button::new("Apply format"))
                     .clicked();
                 cancel = ui.button("Cancel").clicked();
+                ui.hyperlink_to("Learn more", DOCS_URL);
             });
             if apply && let Ok(k) = kind {
                 t.set_kind(dlg.col, k);
@@ -256,8 +344,20 @@ fn preview(ui: &mut egui::Ui, dlg: &DateFmtDlg, k: Kind) {
     } else {
         RichText::new(text)
     });
+    if bad > 0 {
+        ui.label(
+            RichText::new(
+                "To fix: compare a value marked \"not a date\" with the format; try \
+                 the other day/month order, a preset, or a custom pattern (cheat \
+                 sheet). Blank-like values (-, N/A) can stay: they are counted as \
+                 excluded cells, not as dates.",
+            )
+            .small()
+            .weak(),
+        );
+    }
     egui::ScrollArea::vertical()
-        .max_height(240.0)
+        .max_height(150.0)
         .show(ui, |ui| {
             egui::Grid::new(("date-preview", dlg.col))
                 .num_columns(2)
@@ -273,4 +373,24 @@ fn preview(ui: &mut egui::Ui, dlg: &DateFmtDlg, k: Kind) {
                     }
                 });
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The examples of the cheat sheet parse their cell.
+    #[test]
+    fn cheat_sheet_examples_parse() {
+        for (cell, pat) in EXAMPLES {
+            let f = Fmt {
+                shape: Shape::Custom(Pattern::intern(pat).unwrap()),
+                ..Fmt::default()
+            };
+            assert!(
+                time::parse(cell.as_bytes(), f).is_some(),
+                "{pat} does not read {cell}"
+            );
+        }
+    }
 }

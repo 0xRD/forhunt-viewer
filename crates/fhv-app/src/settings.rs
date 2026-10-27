@@ -36,9 +36,15 @@ pub struct Settings {
     pub ui_scale: f32,
     /// Coloring rules, in order (D-065).
     pub coloring_rules: Vec<crate::rules::Rule>,
+    /// Named rule sets (#20), and the one the rules were loaded from or
+    /// saved to last.
+    pub rule_sets: std::collections::BTreeMap<String, Vec<crate::rules::Rule>>,
+    pub rule_set: Option<String>,
     /// Ctrl+C format of the selection and CSV delimiter (D-061).
     pub copy_format: crate::copyfmt::Format,
     pub copy_csv_delim: char,
+    /// New tabs start with "Hide grouped columns" on (#29).
+    pub hide_grouped_cols: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -91,8 +97,11 @@ impl Default for Settings {
             mono_only: true,
             ui_scale: 1.0,
             coloring_rules: Vec::new(),
+            rule_sets: Default::default(),
+            rule_set: None,
             copy_format: Default::default(),
             copy_csv_delim: ',',
+            hide_grouped_cols: false,
         }
     }
 }
@@ -143,7 +152,7 @@ pub fn dirs() -> Dirs {
 }
 
 impl Settings {
-    fn path() -> PathBuf {
+    pub fn path() -> PathBuf {
         dirs().config.join("settings.json")
     }
 

@@ -336,39 +336,101 @@ pub fn paint(t: &mut Tab, rows: Range<u64>) {
         let cells: Vec<&str> = (0..ncols).map(|c| cells_src.cell(pos, c)).collect();
         let cell_rule = &mut p.cell[k * ncols..(k + 1) * ncols];
         if let Some(cr) = compiled.filter(|_| has_rules) {
-            for (i, node, scope) in &cr.rules {
-                if !node.matches(&cells) {
-                    continue;
-                }
-                let i = *i as u16;
-                match scope {
-                    Scope::Row => {
-                        if p.row[k] == NONE {
-                            p.row[k] = i;
-                        }
-                        cell_rule
-                            .iter_mut()
-                            .filter(|x| **x == NONE)
-                            .for_each(|x| *x = i);
-                        break;
-                    }
-                    Scope::Cell => {
-                        hits.iter_mut().for_each(|h| *h = false);
-                        node.mark(&cells, &mut hits);
-                        for (x, h) in cell_rule.iter_mut().zip(&hits) {
-                            if *h && *x == NONE {
-                                *x = i;
-                            }
-                        }
-                    }
-                }
-            }
+            eval(cr, &cells, &mut hits, &mut p.row[k], cell_rule);
         }
         for (c, cnt, _) in &counts {
             if *c < ncols {
                 p.dup[k * ncols + c] = cnt.count(cells[*c]).unwrap_or(0);
             }
         }
+    }
+}
+
+/// First matching rules of a row: the row rule, and per file column the
+/// rule styling the cell (`NONE`: none).
+fn eval(
+    cr: &CompiledRules,
+    cells: &[&str],
+    hits: &mut [bool],
+    row: &mut u16,
+    cell_rule: &mut [u16],
+) {
+    for (i, node, scope) in &cr.rules {
+        if !node.matches(cells) {
+            continue;
+        }
+        let i = *i as u16;
+        match scope {
+            Scope::Row => {
+                if *row == NONE {
+                    *row = i;
+                }
+                cell_rule
+                    .iter_mut()
+                    .filter(|x| **x == NONE)
+                    .for_each(|x| *x = i);
+                break;
+            }
+            Scope::Cell => {
+                hits.iter_mut().for_each(|h| *h = false);
+                node.mark(cells, hits);
+                for (x, h) in cell_rule.iter_mut().zip(hits.iter()) {
+                    if *h && *x == NONE {
+                        *x = i;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Rule colors of any row, off the UI thread (HTML copy, #25).
+pub struct Styler {
+    compiled: CompiledRules,
+    rules: Arc<Vec<Rule>>,
+    theme: Arc<Theme>,
+}
+
+impl Styler {
+    /// None when no rule applies to this tab.
+    pub fn new(t: &Tab) -> Option<Styler> {
+        let theme = t.colors.theme.clone()?;
+        let compiled = compile(&t.colors.rules, t);
+        (!compiled.rules.is_empty()).then(|| Styler {
+            compiled,
+            rules: t.colors.rules.clone(),
+            theme,
+        })
+    }
+
+    /// Row fill, and per file column the cell style, as the grid draws
+    /// them (without duplicate highlighting).
+    pub fn row(&self, cells: &[&str]) -> (Option<Color32>, Vec<CellStyle>) {
+        let n = cells.len();
+        let (mut row, mut cell_rule, mut hits) = (NONE, vec![NONE; n], vec![false; n]);
+        eval(&self.compiled, cells, &mut hits, &mut row, &mut cell_rule);
+        let rule = |i: u16| self.rules.get(i as usize).filter(|_| i != NONE);
+        let bg = rule(row)
+            .filter(|r| r.fill)
+            .map(|r| palette(&self.theme, &r.color).bg.0);
+        let styles = cell_rule
+            .iter()
+            .map(|&ri| {
+                let mut st = CellStyle::default();
+                if let Some(r) = rule(ri) {
+                    let pair = palette(&self.theme, &r.color);
+                    if r.fill && row != ri {
+                        st.bg = Some(pair.bg.0);
+                    }
+                    if r.fill || r.text {
+                        st.fg = Some(pair.fg.0);
+                    }
+                    st.bold = r.bold;
+                }
+                st
+            })
+            .collect();
+        (bg, styles)
     }
 }
 
@@ -453,6 +515,8 @@ pub fn cell_tip(t: &Tab, row: u64, c: usize) -> Option<String> {
 pub struct Editor {
     /// Rule being written before "Add rule" (pre-filled from a cell).
     pub draft: Rule,
+    /// Name typed for "Save as set" / "Rename".
+    set_name: String,
     counting: Option<Receiver<Vec<Option<u64>>>>,
     counts: Option<Vec<Option<u64>>>,
     msg: Option<String>,
@@ -519,16 +583,134 @@ fn style_ui(
     *r != before
 }
 
-/// Shows the editor; true when `rules` changed.
+/// A name not used by a set yet: `base`, `base (2)`...
+pub fn free_set_name(sets: &std::collections::BTreeMap<String, Vec<Rule>>, base: &str) -> String {
+    let base = if base.trim().is_empty() {
+        "rules"
+    } else {
+        base.trim()
+    };
+    let mut name = base.to_string();
+    let mut k = 2;
+    while sets.contains_key(&name) {
+        name = format!("{base} ({k})");
+        k += 1;
+    }
+    name
+}
+
+/// Named rule sets (#20): load, save, save as, rename, delete. True when
+/// the settings changed.
+fn sets_ui(ui: &mut Ui, ed: &mut Editor, s: &mut crate::settings::Settings) -> bool {
+    let mut changed = false;
+    let active = s.rule_set.clone().filter(|n| s.rule_sets.contains_key(n));
+    let modified = active
+        .as_ref()
+        .is_some_and(|n| s.rule_sets.get(n) != Some(&s.coloring_rules));
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Rule set");
+        let shown = match &active {
+            Some(n) if modified => format!("{n} (modified)"),
+            Some(n) => n.clone(),
+            None => "(not saved as a set)".into(),
+        };
+        egui::ComboBox::from_id_salt("rule sets")
+            .selected_text(shown)
+            .width(200.0)
+            .show_ui(ui, |ui| {
+                if s.rule_sets.is_empty() {
+                    ui.label(RichText::new("no sets yet: Save as set").weak());
+                }
+                let names: Vec<String> = s.rule_sets.keys().cloned().collect();
+                for n in names {
+                    if ui
+                        .selectable_label(active.as_ref() == Some(&n), &n)
+                        .on_hover_text("load this set (replaces the current rules)")
+                        .clicked()
+                    {
+                        s.coloring_rules = s.rule_sets[&n].clone();
+                        s.rule_set = Some(n.clone());
+                        ed.set_name = n;
+                        ed.counts = None;
+                        changed = true;
+                    }
+                }
+            });
+        if let Some(n) = &active
+            && ui
+                .add_enabled(modified, egui::Button::new("Save"))
+                .on_hover_text(format!("update the set {n} with the current rules"))
+                .clicked()
+        {
+            s.rule_sets.insert(n.clone(), s.coloring_rules.clone());
+            ed.msg = Some(format!("saved set {n}"));
+            changed = true;
+        }
+        let te = ui.add(
+            egui::TextEdit::singleline(&mut ed.set_name)
+                .hint_text("set name")
+                .desired_width(140.0),
+        );
+        ui.ctx()
+            .accesskit_node_builder(te.id, |n| n.set_label("set name"));
+        let name = ed.set_name.trim().to_string();
+        if ui
+            .add_enabled(!name.is_empty(), egui::Button::new("Save as set"))
+            .on_hover_text(
+                "save the current rules under this name (replaces a set of the same name)",
+            )
+            .clicked()
+        {
+            s.rule_sets.insert(name.clone(), s.coloring_rules.clone());
+            s.rule_set = Some(name.clone());
+            ed.msg = Some(format!("saved set {name}"));
+            changed = true;
+        }
+        if let Some(n) = &active {
+            if ui
+                .add_enabled(
+                    !name.is_empty() && name != *n && !s.rule_sets.contains_key(&name),
+                    egui::Button::new("Rename"),
+                )
+                .on_hover_text(format!("rename {n} to the name typed"))
+                .clicked()
+                && let Some(v) = s.rule_sets.remove(n)
+            {
+                s.rule_sets.insert(name.clone(), v);
+                s.rule_set = Some(name.clone());
+                ed.msg = Some(format!("renamed {n} to {name}"));
+                changed = true;
+            }
+            if ui
+                .button("Delete set")
+                .on_hover_text(format!("delete the set {n} (the current rules stay)"))
+                .clicked()
+            {
+                s.rule_sets.remove(n);
+                s.rule_set = None;
+                ed.msg = Some(format!("deleted set {n}"));
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
+/// Shows the editor; true when the settings (rules or sets) changed.
 pub fn window(
     ctx: &egui::Context,
     open: &mut Option<Editor>,
-    rules: &mut Vec<Rule>,
+    s: &mut crate::settings::Settings,
     tab: Option<&Tab>,
 ) -> bool {
     let Some(ed) = open.as_mut() else {
         return false;
     };
+    if ed.set_name.is_empty()
+        && let Some(n) = &s.rule_set
+    {
+        ed.set_name = n.clone();
+    }
     if let Some(rx) = &ed.counting
         && let Ok(v) = rx.try_recv()
     {
@@ -549,6 +731,17 @@ pub fn window(
                 )
                 .weak(),
             );
+            ui.label(
+                RichText::new(format!(
+                    "Saved: changes are saved as you make them, in {}",
+                    crate::settings::Settings::path().display()
+                ))
+                .small()
+                .weak(),
+            )
+            .on_hover_text("and in sessions; Save as set keeps a named copy to switch back to");
+            changed |= sets_ui(ui, ed, s);
+            let rules = &mut s.coloring_rules;
             ui.separator();
             let errors: Vec<Option<String>> = tab.map(|t| t.colors.errors().to_vec()).unwrap_or_default();
             let mut action: Option<(usize, i32)> = None;
@@ -640,6 +833,27 @@ pub fn window(
                         Err(e) => ed.msg = Some(format!("{}: {e}", p.display())),
                     }
                 }
+                if ui
+                    .button("Import as new set…")
+                    .on_hover_text("keep a ruleset file as a named set and load it")
+                    .clicked()
+                    && let Some(p) = rfd::FileDialog::new().add_filter("rules", &["json"]).pick_file()
+                {
+                    match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| import_json(&b)) {
+                        Ok(v) => {
+                            let stem = p.file_stem().map(|x| x.to_string_lossy().into_owned());
+                            let name = free_set_name(&s.rule_sets, stem.as_deref().unwrap_or(""));
+                            ed.msg = Some(format!("imported {} rules as set {name}", v.len()));
+                            *rules = v.clone();
+                            s.rule_sets.insert(name.clone(), v);
+                            s.rule_set = Some(name.clone());
+                            ed.set_name = name;
+                            ed.counts = None;
+                            changed = true;
+                        }
+                        Err(e) => ed.msg = Some(format!("{}: {e}", p.display())),
+                    }
+                }
                 if ui.button("Export…").clicked()
                     && let Some(p) = rfd::FileDialog::new()
                         .set_file_name("coloring-rules.json")
@@ -701,6 +915,16 @@ pub fn window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_names_are_unique() {
+        let mut sets = std::collections::BTreeMap::new();
+        assert_eq!(free_set_name(&sets, " Logons "), "Logons");
+        sets.insert("Logons".to_string(), Vec::new());
+        sets.insert("Logons (2)".to_string(), Vec::new());
+        assert_eq!(free_set_name(&sets, "Logons"), "Logons (3)");
+        assert_eq!(free_set_name(&sets, ""), "rules");
+    }
 
     #[test]
     fn rules_round_trip_through_json() {

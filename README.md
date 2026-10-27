@@ -69,7 +69,9 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   gaps or repeats (time-sorted `EventRecordId`) is not taken. View >
   *Row numbers*: Auto / Always show # / Never show #, remembered per file.
 - **Sorting.** Multi-column (click, shift-click), deterministic (ties keep
-  file order).
+  file order). Click the `#` header to go back to file order, again for
+  reverse file order (newest first in an appended log), a third time to
+  clear: no sort job, whatever the file size.
 - **Columns.** Show/hide, reorder, resize. Drag a header to move the column (a line shows
   the drop place, Esc cancels, the grid scrolls near its edges; a click still sorts); dropping
   across the frozen edge moves the edge by one. Double-click a header's right edge, or use
@@ -81,26 +83,36 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   grid scrolls near its edges), Shift+click or Shift+arrows to extend,
   Ctrl+click / Ctrl+drag to add or remove cells and ranges, Ctrl+A for all.
   The thin gutter at the left of each row selects whole rows (click,
-  Shift+click, Ctrl+click, drag; the box in its header selects all). The
-  last one used (cells or rows) is what Ctrl+C copies, and the status bar
-  says which, with its size (and count / sum of the numbers in small
-  selections). A new filter, sort or column order clears the ranges and
+  Shift+click, Ctrl+click, drag; the box in its header selects all).
+  Cells and rows are one selection at a time: selecting cells drops the
+  selected rows and the reverse. Selected rows behave like cells spanning
+  every visible column (copy, tag, export, status bar size and count /
+  sum of the numbers in small selections). A new filter, sort or column order clears the ranges and
   the row selection (positions change); the active cell follows its row.
-- **Copy as a table.** Ctrl+C copies the selected cells (bounding rectangle
-  of the ranges, cells outside them left empty) in the default format
-  (Settings: TSV, CSV with `,` or `;`, JSON, Markdown, JSONL; TSV pastes
-  cell by cell into Excel / LibreOffice / Google Sheets); one cell is
-  copied as its bare value. Selected rows are copied with all visible
-  columns and a header line. Right-click: *Copy*, *Copy with headers*,
-  *Copy as ▸*, *Tag selected rows*, *Export selection…*. Values are the
-  file's own (UTC, as written). Up to 1 M cells; beyond, use *Export
-  selection…*.
+- **Copy as a table.** Only the rows and columns that hold a selected cell
+  are copied (Ctrl+click cells in columns A and D: A and D, not B and C;
+  unselected cells of those rows and columns are left empty), in display
+  order. *Copy values* (Ctrl+C) copies the values without column names;
+  *Copy with headers* (Ctrl+Alt+C) adds them. The default format is set in
+  View > Settings: **Markdown** (default since 0.5), TSV (pastes cell by
+  cell into Excel / LibreOffice / Google Sheets), CSV with `,` or `;`,
+  JSON, JSONL or HTML. Without headers JSON / JSONL rows are arrays, a
+  Markdown table gets an empty header row. **HTML** copies a table styled
+  like the current theme and grid font, with the coloring rules (fill, text
+  color, bold), all inline so it survives pasting into mail, Word,
+  Confluence or a ticket; plain-text targets get tab-separated text. One
+  cell is copied as its bare value. Edit menu or right-click: *Copy
+  values*, *Copy with headers*, *Copy as ▸* (a format once, with or
+  without headers), and in the cell menu *Tag selected rows*, *Export
+  selection…*. Values are the file's own (UTC, as written). Up to 1 M
+  cells; beyond, use *Export selection…*.
 - **Detail pane.** Every field of the selected row, including the extra
   fields of malformed rows. JSON cells (e.g. `Payload`) are pretty-printed.
   The field of the active cell is highlighted and scrolled into view, and
   follows the arrow keys; click a field name to select that cell in the
   grid (a hidden column's field is highlighted all the same).
-  Copy cell / row / column.
+  Copy cell / row / column. Close it with its × or Ctrl+D (View > Detail
+  pane); it reopens at the same width.
 - **Coloring rules** (View > *Coloring rules…*, or right-click a cell >
   *Color rows like this…*): a condition in the [query language](#query-language)
   (`Info contains Critical`, `EventID in (4624, 4625)`, `* contains mimikatz`
@@ -110,8 +122,12 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   optionally bold, for the whole row or only the matching cells. Rules can
   be disabled, reordered and deleted; the first rule covering a cell gives
   its style. *Count rows* shows how many rows of the view match each
-  condition. Rules are saved in the settings and in sessions, and
-  *Export… / Import…* share a ruleset as JSON. Only the rows on screen are
+  condition. Rules are saved in the settings as you edit them (the dialog
+  shows where) and in sessions. **Rule sets**: *Save as set* keeps the
+  rules under a name ("Logon events", "Persistence"...), then load, save,
+  rename or delete sets in the dialog, or switch from View > *Rule set*.
+  *Export… / Import…* share a ruleset as JSON; *Import as new set…* keeps
+  a file as a set. Only the rows on screen are
   evaluated, so scrolling costs the same with or without rules. The
   selected row keeps its selection color.
 - **Duplicate / unique values**: right-click a header > *Highlight duplicates
@@ -132,7 +148,11 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   shows the levels in order: click one to sort its groups by value or by
   count (ascending / descending, per level; rows inside a group keep the
   row sort), move it in or out, or remove it; *Expand all* / *Collapse
-  all* / *Clear grouping*. Click a header's arrow (or double-click it, or
+  all* / *Clear grouping*. A new level starts as an overview: every group
+  collapsed, largest first. *Hide grouped columns* (group bar; default in
+  Settings) leaves the grouped columns out of the grid, copy and export of
+  the visible columns, since their value is in the group headers; they
+  come back at their place when the grouping goes. Click a header's arrow (or double-click it, or
   Left / Right on a selected header) to close / open it. Right-click a
   group header: *Filter to this group* (exact-value chips) or *Exclude
   this group* (a chip for an outer group, a `NOT (...)` query term for a
@@ -179,14 +199,17 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   Light high contrast, Dracula, Solarized dark / light, Nord, Gruvbox dark,
   or System (follows the OS light / dark setting). Hovering an entry previews
   it. Every theme passes WCAG AA contrast for text, the high-contrast ones
-  AAA (checked by a test). A theme is one JSON file
+  AAA, and buttons, toggles, fields and chips have an outline of at least
+  3:1 against the toolbar (checked by tests; a theme may set
+  `control_border`, otherwise it is derived). A theme is one JSON file
   (`crates/fhv-app/assets/themes/`); your own go in `<config>/themes/*.json`
   (config = `~/Library/Application Support/forhunt-viewer` on macOS,
   `%APPDATA%\forhunt-viewer` on Windows, `~/.config/forhunt-viewer` on Linux).
 - **Settings** (View > Settings…): theme, grid font (bundled JetBrains Mono
   or Inter, any installed font, monospaced only by default, or a font file),
   grid font size 8-32 pt (rows follow), and a separate UI scale for menus,
-  panels and dialogs. Changes apply at once, to all tabs, and are saved;
+  panels and dialogs, the default copy format, and whether new tabs hide
+  grouped columns. Changes apply at once, to all tabs, and are saved;
   *Reset to default* restores them. A font file that cannot be read is
   refused and the grid keeps its font.
 - **Idle means idle**: no repaint without input or running work (0 % CPU),
@@ -351,6 +374,7 @@ TargetUserName is not blank AND NOT (IpAddress = "-" OR IpAddress = "::1")
 | Ctrl+W | close tab |
 | Ctrl+F | global search |
 | Ctrl+L | query bar (Enter applies, Tab completes, Esc reverts) |
+| Ctrl+D | show / hide the detail pane (or its × button) |
 | F3 / Shift+F3 | next / previous match |
 | Ctrl+G | go to row (`#` column, or the file's own row-number column) |
 | Arrows, PgUp/PgDn, Ctrl+Home/End | move the selection |
@@ -358,7 +382,8 @@ TargetUserName is not blank AND NOT (IpAddress = "-" OR IpAddress = "::1")
 | Shift+arrows | extend the range |
 | Ctrl+A | select all cells |
 | row gutter (left edge): click, Shift+click, Ctrl+click, drag | select rows |
-| Ctrl+C | copy the selection in the default format (one cell: its value) |
+| Ctrl+C | copy the selected values, no headers, in the default format (one cell: its value) |
+| Ctrl+Alt+C | copy the selection with headers |
 | Ctrl+Shift+C | copy the active row as indented JSON (right-click a cell for tab-separated) |
 | click / Shift+click a header | sort / add a sort column |
 | Left / Right on a group header, click its arrow, double-click it | close / open the group |

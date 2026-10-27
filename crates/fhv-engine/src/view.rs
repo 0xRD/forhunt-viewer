@@ -87,15 +87,18 @@ pub fn run(engine: &Engine, q: &Query) -> Result<View> {
             b
         }
     };
-    let order = if q.sort.is_empty() {
-        None
-    } else {
-        Some(Arc::new(sort_with(
+    // A row-number key is a sort of its own (rows are unique): the keys
+    // after it change nothing, and before it it is dropped.
+    let keys: Vec<SortKey> = q.sort.iter().filter(|k| !k.is_row()).copied().collect();
+    let order = match q.sort.first() {
+        None => None,
+        Some(k) if k.is_row() => k.desc.then(|| Arc::new(rows.iter().rev().collect())),
+        Some(_) => Some(Arc::new(sort_with(
             engine.table(),
             &rows,
-            &q.sort,
+            &keys,
             &engine.kind_overrides(),
-        )?))
+        )?)),
     };
     Ok(View {
         rows: Arc::new(rows),

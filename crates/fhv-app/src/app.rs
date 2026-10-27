@@ -132,6 +132,11 @@ pub struct App {
     /// Evidence being parsed by forhunt into a CSV (D-033).
     conversions: Vec<crate::convert::Conversion>,
     pub(crate) help: bool,
+    /// System clipboard for HTML copies (egui only puts text), created on
+    /// first use and kept: on X11 the owner serves the paste.
+    html_clip: Option<arboard::Clipboard>,
+    /// "with headers" in the Copy as menus.
+    copy_as_headers: bool,
     focus_search: bool,
     style: Style,
     /// Fields of the row shown in the detail pane (read once per row, not
@@ -186,6 +191,8 @@ impl App {
             reopen_dlg: None,
             conversions: Vec::new(),
             help: false,
+            html_clip: None,
+            copy_as_headers: false,
             focus_search: false,
             detail: None,
             detail_pick: None,
@@ -367,6 +374,10 @@ impl App {
         let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
         let cmd_shift = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
         let query = ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::L)));
+        if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::D))) {
+            self.settings.detail_pane = !self.settings.detail_pane;
+            self.settings.save();
+        }
         if query && let Some(t) = self.tab() {
             t.query.focus = true;
         }
@@ -400,14 +411,16 @@ impl App {
         if copy_row && let Some(t) = self.tab() {
             copy_selected_row(ctx, t, false);
         }
-        let (fmt, delim) = (self.settings.copy_format, self.settings.copy_csv_delim);
-        if copy
-            && !copy_row
-            && !typing
-            && let Some(t) = self.tab()
-            && let Some(text) = crate::copyfmt::copy(t, None, fmt, delim, None)
-        {
-            ctx.copy_text(text);
+        let copy_hdr = ctx.input_mut(|i| {
+            i.consume_shortcut(&KeyboardShortcut::new(
+                Modifiers::COMMAND | Modifiers::ALT,
+                Key::C,
+            ))
+        });
+        if copy && !copy_row && !typing {
+            self.copy_selection(ctx, None, false);
+        } else if copy_hdr && !typing {
+            self.copy_selection(ctx, None, true);
         }
         if (f3 || sf3)
             && let Some(t) = self.tab()
@@ -421,10 +434,81 @@ impl App {
         }
     }
 
+    /// The coloring rules or sets were edited: tabs repaint, settings saved.
+    fn rules_changed(&mut self) {
+        if *self.rules != self.settings.coloring_rules {
+            self.rules = std::sync::Arc::new(self.settings.coloring_rules.clone());
+        }
+        self.settings.save();
+    }
+
+    /// Grid colors and font for an HTML copy (#25).
+    fn look(settings: &Settings, ctx: &egui::Context) -> crate::copyfmt::Look {
+        let th = crate::theme::current(ctx);
+        let font = match &settings.grid_font {
+            crate::settings::GridFont::Bundled(n) | crate::settings::GridFont::System(n) => {
+                n.clone()
+            }
+            crate::settings::GridFont::File(p) => p
+                .file_stem()
+                .map_or_else(|| "monospace".into(), |s| s.to_string_lossy().into_owned()),
+        };
+        crate::copyfmt::Look {
+            bg: th.bg.0,
+            stripe: th.bg_stripe.0,
+            fg: th.text.0,
+            header_bg: th.bg_header.0,
+            header_fg: th.text_strong.0,
+            border: th.grid_line.0,
+            font,
+            size_pt: settings.grid_font_size,
+        }
+    }
+
+    /// Copies the active tab's selection (`fmt` None: the default format).
+    fn copy_selection(
+        &mut self,
+        ctx: &egui::Context,
+        fmt: Option<crate::copyfmt::Format>,
+        headers: bool,
+    ) {
+        let look = Self::look(&self.settings, ctx);
+        let (def, delim) = (self.settings.copy_format, self.settings.copy_csv_delim);
+        let Some(t) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        if let Some(clip) = crate::copyfmt::copy(t, fmt, def, delim, headers, &look) {
+            Self::put_clip(&mut self.html_clip, ctx, clip);
+        }
+    }
+
+    /// Puts a copy on the clipboard: HTML with its plain-text fallback
+    /// through the system clipboard, text through egui.
+    fn put_clip(
+        html_clip: &mut Option<arboard::Clipboard>,
+        ctx: &egui::Context,
+        clip: crate::copyfmt::Clip,
+    ) {
+        if let Some(html) = &clip.html
+            && !cfg!(test)
+        {
+            if html_clip.is_none() {
+                *html_clip = arboard::Clipboard::new().ok();
+            }
+            if let Some(cb) = html_clip
+                && cb.set_html(html, Some(&clip.text)).is_ok()
+            {
+                return;
+            }
+        }
+        ctx.copy_text(clip.text);
+    }
+
     /// Settings a new tab starts with: the remembered "only matches" choice
     /// (D-040) and the row-number mode of this file (D-042).
     fn apply_prefs(&self, t: &mut Tab) {
         t.search_filter = self.settings.search_only_matches;
+        t.groups.hide_cols = self.settings.hide_grouped_cols;
         t.rownum_mode = self
             .settings
             .row_num
@@ -546,6 +630,15 @@ impl App {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
+            ui.menu_button("Edit", |ui| {
+                let def = self.settings.copy_format;
+                let mut hdr = self.copy_as_headers;
+                let pick = copy_menu(ui, def, &mut hdr);
+                self.copy_as_headers = hdr;
+                if let Some((fmt, headers)) = pick {
+                    self.copy_selection(ui.ctx(), fmt, headers);
+                }
+            });
             ui.menu_button("View", |ui| {
                 ui.menu_button("Theme", |ui| {
                     self.appearance.theme_picker(ui, &mut self.settings)
@@ -554,8 +647,11 @@ impl App {
                     ui.close();
                     self.appearance.settings_open = true;
                 }
+                let key = ui
+                    .ctx()
+                    .format_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::D));
                 if ui
-                    .checkbox(&mut self.settings.detail_pane, "Detail pane")
+                    .checkbox(&mut self.settings.detail_pane, format!("Detail pane ({key})"))
                     .changed()
                 {
                     self.settings.save();
@@ -605,6 +701,24 @@ impl App {
                 {
                     ui.close();
                     self.rules_dlg.get_or_insert_with(Default::default);
+                }
+                if !self.settings.rule_sets.is_empty() {
+                    ui.menu_button("Rule set", |ui| {
+                        let names: Vec<String> = self.settings.rule_sets.keys().cloned().collect();
+                        for n in names {
+                            let on = self.settings.rule_set.as_ref() == Some(&n);
+                            if ui
+                                .radio(on, &n)
+                                .on_hover_text("use these coloring rules")
+                                .clicked()
+                            {
+                                self.settings.coloring_rules = self.settings.rule_sets[&n].clone();
+                                self.settings.rule_set = Some(n);
+                                self.rules_changed();
+                                ui.close();
+                            }
+                        }
+                    });
                 }
                 if ui.button("Columns…").clicked() {
                     ui.close();
@@ -657,6 +771,7 @@ impl App {
                     ui.close();
                     self.help = true;
                 }
+                ui.hyperlink_to("Date formats (docs)", crate::datefmt::DOCS_URL);
             });
         });
     }
@@ -954,7 +1069,7 @@ impl App {
                         .map(|k| {
                             format!(
                                 "{}{}",
-                                t.table.columns[k.col],
+                                t.table.columns.get(k.col).map_or("#", String::as_str),
                                 if k.desc { " ↓" } else { " ↑" }
                             )
                         })
@@ -1117,6 +1232,7 @@ impl App {
         let Some((_, _, fields, shown_all)) = &self.detail else {
             return;
         };
+        let mut close = false;
         ui.horizontal(|ui| {
             let num = t.row_number(row);
             if t.num_col().is_some() {
@@ -1138,7 +1254,20 @@ impl App {
             if ui.button("copy row").clicked() {
                 ui.ctx().copy_text(row_tsv(t, fields));
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let r = ui.button("×");
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Button, true, "Close detail pane")
+                });
+                if r.on_hover_text("close the detail pane (Ctrl+D)").clicked() {
+                    close = true;
+                }
+            });
         });
+        if close {
+            self.settings.detail_pane = false;
+            self.settings.save();
+        }
         if let Some(note) = t.tags.get(&row).filter(|n| !n.is_empty()) {
             ui.label(RichText::new(format!("note: {note}")).italics());
         }
@@ -1306,6 +1435,8 @@ impl App {
         let group_action: std::cell::Cell<Option<crate::groups::Action>> = Default::default();
         t.colors.theme = Some(theme.clone());
 
+        let copy_default = self.settings.copy_format;
+        let mut copy_as_headers = self.copy_as_headers;
         let resp = {
             let mut filter_cell = |ui: &mut Ui, dc: usize, rect: egui::Rect| {
                 let Some(c) = file_col(dc) else { return };
@@ -1433,22 +1564,9 @@ impl App {
                     }
                     return;
                 }
-                if ui.button("Copy   Ctrl+C").clicked() {
-                    cell_action = Some(CellAction::Copy(None, None));
-                    ui.close();
+                if let Some((fmt, headers)) = copy_menu(ui, copy_default, &mut copy_as_headers) {
+                    cell_action = Some(CellAction::Copy(fmt, headers));
                 }
-                if ui.button("Copy with headers").clicked() {
-                    cell_action = Some(CellAction::Copy(None, Some(true)));
-                    ui.close();
-                }
-                ui.menu_button("Copy as", |ui| {
-                    for f in crate::copyfmt::Format::ALL {
-                        if ui.button(f.label()).clicked() {
-                            cell_action = Some(CellAction::Copy(Some(f), None));
-                            ui.close();
-                        }
-                    }
-                });
                 if rows_mode && ui.button("Tag selected rows").clicked() {
                     cell_action = Some(CellAction::TagSelected);
                     ui.close();
@@ -1536,10 +1654,24 @@ impl App {
             t.filters[c].quick = q;
             t.requery();
         }
+        if let Some((dc, _)) = resp.header_clicked
+            && dc == crate::tab::DC_NUM
+            && ready
+        {
+            // The # column: file order, reversed, off (#23), alone.
+            t.sort = match t.sort.first() {
+                Some(k) if k.is_row() && k.desc => Vec::new(),
+                Some(k) if k.is_row() => vec![SortKey::row(true)],
+                _ => vec![SortKey::row(false)],
+            };
+            t.requery();
+        }
         if let Some((dc, shift)) = resp.header_clicked
             && let Some(c) = t.file_col(dc)
             && ready
         {
+            // A row-number sort does not combine with columns.
+            t.sort.retain(|k| !k.is_row());
             match t.sort.iter().position(|k| k.col == c) {
                 Some(i) if shift => t.sort[i].desc = !t.sort[i].desc,
                 Some(i) if t.sort.len() == 1 => {
@@ -1606,12 +1738,14 @@ impl App {
                 }
             }
         }
+        self.copy_as_headers = copy_as_headers;
         if let Some(a) = cell_action {
             match a {
                 CellAction::Copy(fmt, headers) => {
+                    let look = Self::look(&self.settings, ui.ctx());
                     let (def, delim) = (self.settings.copy_format, self.settings.copy_csv_delim);
-                    if let Some(text) = crate::copyfmt::copy(t, fmt, def, delim, headers) {
-                        ui.ctx().copy_text(text);
+                    if let Some(clip) = crate::copyfmt::copy(t, fmt, def, delim, headers, &look) {
+                        Self::put_clip(&mut self.html_clip, ui.ctx(), clip);
                     }
                 }
                 CellAction::TagSelected => {
@@ -1977,7 +2111,15 @@ impl App {
                     }
                     ui.separator();
                     for c in 0..t.table.columns.len() {
-                        if !t.order.contains(&c) {
+                        if t.group_hidden.contains_key(&c) {
+                            ui.add_enabled(
+                                false,
+                                egui::Checkbox::new(
+                                    &mut false,
+                                    format!("{} (shown as a group level)", t.table.columns[c]),
+                                ),
+                            );
+                        } else if !t.order.contains(&c) {
                             let mut on = false;
                             if ui.checkbox(&mut on, &t.table.columns[c]).changed() && on {
                                 crate::colorder::show(&mut t.order, &mut t.hidden_after, c);
@@ -2190,6 +2332,8 @@ impl App {
                             ("Ctrl+O", "open files"),
                             ("Ctrl+W", "close tab"),
                             ("Ctrl+F", "global search"),
+                            ("Ctrl+L", "query bar"),
+                            ("Ctrl+D", "show / hide the detail pane"),
                             ("F3 / Shift+F3", "next / previous match"),
                             ("Ctrl+G", "go to row"),
                             ("Arrows, PgUp/PgDn", "move selection"),
@@ -2204,8 +2348,9 @@ impl App {
                             ),
                             (
                                 "Ctrl+C",
-                                "copy the selection (default format: TSV; right-click: Copy as)",
+                                "copy the selected values, no headers (default format: Markdown; Edit or right-click: Copy as)",
                             ),
+                            ("Ctrl+Alt+C", "copy the selection with headers"),
                             (
                                 "Ctrl+Shift+C",
                                 "copy row as JSON (right-click: tab-separated)",
@@ -2336,9 +2481,59 @@ enum HeaderAction {
     Dupes(usize, crate::dupes::Mode, crate::dupes::Scope),
 }
 
+/// Copy entries of the Edit and cell menus (#28): values only, with
+/// headers, or in another format. Returns (format, headers).
+fn copy_menu(
+    ui: &mut Ui,
+    default: crate::copyfmt::Format,
+    as_headers: &mut bool,
+) -> Option<(Option<crate::copyfmt::Format>, bool)> {
+    let mut pick = None;
+    let key = |m| ui.ctx().format_shortcut(&KeyboardShortcut::new(m, Key::C));
+    let (k, kh) = (
+        key(Modifiers::COMMAND),
+        key(Modifiers::COMMAND | Modifiers::ALT),
+    );
+    if ui
+        .add(egui::Button::new("Copy values").shortcut_text(k))
+        .on_hover_text(format!(
+            "the selected cells without the column names, as {}",
+            default.label()
+        ))
+        .clicked()
+    {
+        pick = Some((None, false));
+        ui.close();
+    }
+    if ui
+        .add(egui::Button::new("Copy with headers").shortcut_text(kh))
+        .on_hover_text("the column names, then the selected cells")
+        .clicked()
+    {
+        pick = Some((None, true));
+        ui.close();
+    }
+    ui.menu_button("Copy as", |ui| {
+        ui.checkbox(as_headers, "with headers");
+        ui.separator();
+        for f in crate::copyfmt::Format::ALL {
+            let label = if f == default {
+                format!("{}  (default)", f.label())
+            } else {
+                f.label().to_string()
+            };
+            if ui.radio(f == default, label).clicked() {
+                pick = Some((Some(f), *as_headers));
+                ui.close();
+            }
+        }
+    });
+    pick
+}
+
 enum CellAction {
-    /// The selection: format (None: the default), headers (None: default).
-    Copy(Option<crate::copyfmt::Format>, Option<bool>),
+    /// The selection: format (None: the default), with headers.
+    Copy(Option<crate::copyfmt::Format>, bool),
     TagSelected,
     ExportSelection,
     /// Row, as tab-separated text (else indented JSON).
@@ -2728,13 +2923,15 @@ impl eframe::App for App {
         }
         let tz = self.tz.name.clone();
         let mut running = self.poll_conversions();
+        let mut clips = Vec::new();
         for t in &mut self.tabs {
             running |= t.poll(&tz);
             t.set_rules(self.rules.clone());
             running |= crate::dupes::poll(t, self.settings.query_case_sensitive);
-            if let Some(text) = t.clipboard.take() {
-                ctx.copy_text(text);
-            }
+            clips.extend(t.clipboard.take());
+        }
+        for clip in clips {
+            Self::put_clip(&mut self.html_clip, &ctx, clip);
         }
         if running {
             // Progress refresh only, throttled (D-055).
@@ -2775,11 +2972,10 @@ impl eframe::App for App {
         if crate::rules::window(
             &ctx,
             &mut self.rules_dlg,
-            &mut self.settings.coloring_rules,
+            &mut self.settings,
             self.tabs.get(self.active),
         ) {
-            self.rules = std::sync::Arc::new(self.settings.coloring_rules.clone());
-            self.settings.save();
+            self.rules_changed();
         }
 
         self.appearance.settings_window(&ctx, &mut self.settings);

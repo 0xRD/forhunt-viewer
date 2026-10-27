@@ -282,6 +282,14 @@ impl State {
                 });
                 ui.separator();
                 if ui
+                    .checkbox(&mut s.hide_grouped_cols, "Hide grouped columns in new tabs")
+                    .on_hover_text("the grouped columns' values are already in the group headers")
+                    .changed()
+                {
+                    s.save();
+                }
+                ui.separator();
+                if ui
                     .button("Reset to default")
                     .on_hover_text("Dark theme, JetBrains Mono 12.5 pt, UI scale 100 %")
                     .clicked()

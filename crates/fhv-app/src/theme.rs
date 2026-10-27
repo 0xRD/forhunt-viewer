@@ -115,6 +115,10 @@ pub struct Theme {
     pub hover: Rgb,
     pub active: Rgb,
     pub border: Rgb,
+    /// Outline of buttons, toggles, fields and chips at rest (#21);
+    /// absent: derived from `border` (see [`Theme::control_border`]).
+    #[serde(default)]
+    pub control_border: Option<Rgb>,
     pub grid_line: Rgb,
     /// Selected row (and selected text, selected toggles).
     pub selection: Rgb,
@@ -245,6 +249,26 @@ where
 }
 
 impl Theme {
+    /// Outline of controls at rest: at least 3:1 against the panels they
+    /// sit on (WCAG 1.4.11), so a button reads as a button whatever its
+    /// fill. Unless the theme sets one, `border` moved toward `text`
+    /// until it is.
+    pub fn control_border(&self) -> Color32 {
+        if let Some(c) = self.control_border {
+            return c.0;
+        }
+        let grounds = [self.bg.0, self.bg_header.0, self.bg_window.0];
+        let (a, b) = (self.border.0, self.text.0);
+        (0..=20)
+            .map(|k| {
+                let t = k as f32 / 20.0;
+                let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+                Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+            })
+            .find(|&c| grounds.iter().all(|&g| contrast(c, g) >= 3.0))
+            .unwrap_or(b)
+    }
+
     pub fn visuals(&self) -> egui::Visuals {
         let mut v = if self.dark {
             egui::Visuals::dark()
@@ -283,12 +307,37 @@ impl Theme {
             s.weak_bg_fill = bg.0;
             s.fg_stroke.color = fg.0;
         }
-        w.hovered.bg_stroke.color = self.border.0;
-        w.active.bg_stroke.color = self.accent.0;
-        if self.high_contrast {
-            w.inactive.bg_stroke = egui::Stroke::new(1.0, self.border.0);
-        }
+        // Controls: a visible outline at rest, the accent when hovered,
+        // pressed or open (#21).
+        w.inactive.bg_stroke = egui::Stroke::new(1.0, self.control_border());
+        w.hovered.bg_stroke = egui::Stroke::new(1.5, self.accent.0);
+        w.active.bg_stroke = egui::Stroke::new(1.5, self.accent.0);
+        w.open.bg_stroke = egui::Stroke::new(1.0, self.accent.0);
         v
+    }
+
+    /// Non-text pairs of the header and toolbar (WCAG 1.4.11: 3:1): the
+    /// outline of controls at rest and when hovered, against the panels.
+    #[cfg(test)]
+    pub fn control_pairs(&self) -> Vec<(String, Color32, Color32)> {
+        let mut out = Vec::new();
+        for (n, bg) in [
+            ("bg", self.bg),
+            ("bg_header", self.bg_header),
+            ("bg_window", self.bg_window),
+        ] {
+            out.push((
+                format!("control_border on {n}"),
+                self.control_border(),
+                bg.0,
+            ));
+            out.push((
+                format!("accent (hover outline) on {n}"),
+                self.accent.0,
+                bg.0,
+            ));
+        }
+        out
     }
 
     /// Text / background pairs the UI draws, for the contrast check.
@@ -366,7 +415,6 @@ pub fn over(fg: Color32, bg: Color32) -> Color32 {
 }
 
 /// WCAG 2 contrast ratio of two opaque colors (1 to 21).
-#[allow(dead_code)]
 pub fn contrast(a: Color32, b: Color32) -> f32 {
     fn lum(c: Color32) -> f32 {
         let ch = |v: u8| {
@@ -450,6 +498,29 @@ mod tests {
         }
         assert!(bad.is_empty(), "{bad:#?}");
         assert!(builtin().iter().filter(|t| t.high_contrast).count() >= 2);
+    }
+
+    /// Header and toolbar controls stand out from their panels: 3:1 for
+    /// outlines, in every theme and in a user theme without the token
+    /// (#21).
+    #[test]
+    fn control_contrast_meets_wcag() {
+        let mut bad = Vec::new();
+        let mut mine: Theme = parse(embedded::THEMES[0].1).unwrap();
+        mine.control_border = None;
+        mine.border = Rgb(mine.bg.0);
+        for t in builtin().iter().chain([&mine]) {
+            for (what, fg, bg) in t.control_pairs() {
+                let c = contrast(fg, bg);
+                if c < 3.0 {
+                    bad.push(format!("{}: {what} = {c:.2} < 3", t.name));
+                }
+            }
+            let v = t.visuals();
+            assert_eq!(v.widgets.inactive.bg_stroke.color, t.control_border());
+            assert!(v.widgets.inactive.bg_stroke.width >= 1.0);
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
     }
 
     #[test]

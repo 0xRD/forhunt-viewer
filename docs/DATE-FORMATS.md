@@ -159,6 +159,60 @@ Range filter operands on a time column are date text (ISO or the column's
 day/month order and year) in the display zone, or a value written like the
 column's cells (an epoch number on an epoch column).
 
+## The file's value, the parsed time, the display zone
+
+Three things are easy to mix up:
+
+| | What it is | Changed by |
+|---|---|---|
+| **File value** | the text in the file, e.g. `03/01/2024 14:05` or `1709296496` | nothing: copy, export, text filters and global search use it as is |
+| **Parsed time** | the instant the value stands for, in UTC | the column's format (*Date format…*): order, preset or pattern, and the zone of times written without an offset |
+| **Display zone** | the zone times are shown in | View > Time zone; display only |
+
+Example: a column holds `2024-03-01 14:05:00` (no offset), written on a
+machine in Paris.
+
+- With the default zone (UTC) it is read as 14:05 UTC: wrong by an hour.
+- Set *Zone of times without offset* to `Europe/Paris`: it is read as
+  13:05 UTC (CET is UTC+1 in March), and shown as 13:05 with the display
+  zone UTC, or 14:05 with the display zone Europe/Paris.
+- A value with an offset (`2024-03-01T14:05:00+01:00`) or an epoch number
+  is always the same instant: the column zone never shifts it.
+
+## Dates in filters and queries
+
+A date typed in a range filter, a chip or the query bar (`TimeCreated >=
+2024-03-01 14:00`) is read in the **display zone**, like the times on
+screen, so what you type matches what you see. A date alone means the
+whole day: `<= 2024-03-01` keeps all of 1 March, `between 2024-03-01 and
+2024-03-02` both days. Text operators (`contains`, `=`, regex) match the
+file value, not the parsed time.
+
+## What is saved
+
+- The column format (mode, order, zone, year) is remembered per file path
+  in the settings, so the file reopens with it, and saved in sessions.
+- The display zone is a setting of the app, not of the file.
+- Clearing a column back to *Auto* removes the remembered format.
+
+## Fixing values that are not dates
+
+The dialog previews the first 20 non-blank values and counts those that do
+not parse. Typical cases:
+
+| Preview shows | Fix |
+|---|---|
+| `13/02/2024` not a date, day/month unsure | *d/M or M/d*: day first |
+| `01/03/24 14:05` (two-digit year) | Custom `%d/%m/%y %H:%M` |
+| `2024.03.01-14h05m09` | Custom `%Y.%m.%d-%Hh%Mm%S` |
+| `45352.52` read as a number | Preset *Excel serial date* |
+| `730989296.25` read as Unix seconds in 1993 | Preset *Mac / Cocoa absolute time* |
+| `-`, `N/A`, `0` among dates | nothing: they stay "not a date" and are counted as excluded cells by range filters |
+| an id column (`EventRecordID`) taken for an epoch | *Not a date* |
+
+The dialog's *Cheat sheet and examples* lists the patterns, and a click on
+an example fills the custom field.
+
 ## Not supported
 
 ISO week dates (`2024-W09-5`) and ordinal dates (`2024-061`) without a custom

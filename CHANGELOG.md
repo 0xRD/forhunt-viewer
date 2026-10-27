@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.5.0 (2026-10-27)
+
+Feedback on 0.4.0: fourteen issues on copy, selection, grouping, sorting,
+the header and dates.
+
+Behaviour changes
+- Ctrl+C copies **values only**, without column names, for cell and row
+  selections alike; *Copy with headers* is Ctrl+Alt+C (Cmd+Option+C on
+  macOS) (#28).
+- The default copy format is **Markdown** instead of TSV for new
+  installs. A copy format saved by an earlier version (0.4.0 saved it in
+  every settings file) is kept: pick Markdown in View > Settings to change
+  it (#26).
+
+Copy and selection
+- Copy keeps only the rows and columns that hold a selected cell: two
+  Ctrl+clicked cells in columns A and D copy A and D, not A to D (#27).
+- Copy values / Copy with headers in the Edit menu and the cell menu, with
+  shortcuts; *Copy as ▸* lists every format, marks the default and has a
+  "with headers" toggle. Without headers JSON / JSONL rows are arrays and a
+  Markdown table gets an empty header row. The status bar says what was
+  copied ("12 cells, no headers as Markdown table") (#28).
+- HTML copy: a table styled like the current theme and grid font, with the
+  coloring rules, inline styles only, every cell escaped; plain-text
+  targets get tab-separated text (#25).
+- View > Settings chooses the default copy format among all of them (#26).
+- Cell and row selections are exclusive: selecting cells drops the
+  selected rows and the reverse; modifiers combine within one kind;
+  Shift+arrows extend selected rows; selected rows copy, tag, export and
+  sum like cells spanning every visible column (#24).
+
+Grouping
+- No column lines across group header rows, frozen edge included (#17).
+- A new grouping, or a new nested level, starts collapsed with groups
+  largest first; sessions keep their own state (#18).
+- *Hide grouped columns* (group bar, default in Settings): the grouped
+  columns leave the grid and come back at their place when the grouping
+  goes; saved in sessions; copy and export follow the visible columns (#29).
+
+Sorting and columns
+- Click the `#` header: file order, reverse file order, off. No sort job
+  on large files; saved in sessions (#23).
+- Auto-size leaves room for the sort arrow even on unsorted columns, and a
+  narrow header keeps its arrow visible and cuts the name instead (#22).
+
+Display
+- Header and toolbar: buttons, toggles, fields and chips get an outline of
+  at least 3:1 against the toolbar in every theme (before: none outside
+  the high-contrast themes), the accent on hover and press; checked by a
+  test. Themes may set `control_border` (#21).
+- Detail pane: a × button and Ctrl+D (View > Detail pane) (#30).
+
+Coloring rules
+- The dialog says rules are saved as you edit, and where. Named rule sets:
+  save as, save, load, rename, delete, *Import as new set…*, and View >
+  Rule set to switch (#20).
+
+Dates
+- Date format dialog: what each mode does, a strftime cheat sheet with
+  examples you can click, explanations of the zone and year fields, a hint
+  when values do not parse, a *Learn more* link (also in Help).
+  `docs/DATE-FORMATS.md` explains the file value / parsed time / display
+  zone, how typed dates in filters are read, what is saved, and how to fix
+  values that are not dates (#19).
+
 ## 0.4.0 (2026-10-27)
 
 Feature release from a colleague's review: sixteen issues, from a query

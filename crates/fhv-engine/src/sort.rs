@@ -39,6 +39,23 @@ pub struct SortKey {
     pub desc: bool,
 }
 
+impl SortKey {
+    /// `col` of a sort by row number (file order), alone: ascending is
+    /// no sort, descending a reverse, neither reads a column.
+    pub const ROW: usize = usize::MAX;
+
+    pub fn row(desc: bool) -> SortKey {
+        SortKey {
+            col: SortKey::ROW,
+            desc,
+        }
+    }
+
+    pub fn is_row(&self) -> bool {
+        self.col == SortKey::ROW
+    }
+}
+
 const BLOCK: u64 = 32_768;
 
 #[derive(Clone, Copy, PartialEq)]

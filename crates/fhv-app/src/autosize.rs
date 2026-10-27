@@ -38,6 +38,20 @@ pub fn width(
     (w + 2.0 * pad + 1.0).clamp(MIN_WIDTH, MAX_WIDTH)
 }
 
+/// Header width: the label (capped like cells) plus its marks, room for
+/// the sort arrow included whether or not the column is sorted, so the
+/// arrow always shows and sorting later does not need a wider column
+/// (#22). The marks come on top of the cap.
+pub fn header_width(
+    measure: &mut dyn FnMut(&str) -> f32,
+    label: &str,
+    marks: &str,
+    pad: f32,
+) -> f32 {
+    let w = measure(label).min(MAX_WIDTH - 2.0 * pad - 1.0) + measure(marks);
+    (w + 2.0 * pad + 1.0).max(MIN_WIDTH)
+}
+
 /// View positions to measure: `visible` plus `SAMPLE` evenly spaced ones.
 pub fn sample_positions(n: u64, visible: Range<u64>) -> Vec<u64> {
     let k = SAMPLE.min(n);
@@ -70,14 +84,13 @@ pub fn run(ui: &Ui, t: &mut Tab, st: &grid::Style, cols: &[usize]) {
     let mut body = measure(st.font.clone());
     let mut head = measure(FontId::proportional(13.0));
     for &c in cols {
-        let mut h = t.table.columns[c].clone();
-        if t.sort.iter().any(|k| k.col == c) {
-            h.push_str(" ↓2");
-        }
+        // Widest arrow, with a sort-key number.
+        let mut marks = String::from(" ↓2");
         if t.filters.get(c).is_some_and(|f| f.is_active()) {
-            h.push_str(" ≡");
+            marks.push_str(" ≡");
         }
-        let hw = width(&mut head, &h, Vec::<&str>::new(), st.pad);
+        marks.push_str(&t.dupes.header_mark(c));
+        let hw = header_width(&mut head, &t.table.columns[c], &marks, st.pad);
         let w = width(
             &mut body,
             "",
@@ -102,6 +115,24 @@ mod tests {
         assert_eq!(width(&mut m, "a", [huge.as_str()], 5.0), MAX_WIDTH);
         // Line breaks are measured as the grid draws them (one line).
         assert_eq!(width(&mut m, "", ["ab\ncd"], 0.0), 5.0 * 7.0 + 1.0);
+    }
+
+    #[test]
+    fn header_keeps_room_for_the_sort_arrow() {
+        let mut m = |s: &str| s.chars().count() as f32 * 7.0;
+        // Short label: the arrow still fits.
+        assert_eq!(header_width(&mut m, "a", " ↓2", 5.0), 4.0 * 7.0 + 11.0);
+        // A label at the cap: the marks are added on top, not cut.
+        let long = "x".repeat(500);
+        let w = header_width(&mut m, &long, " ↓2", 5.0);
+        assert_eq!(w, MAX_WIDTH + 3.0 * 7.0);
+        // Any size of font.
+        let mut big = |s: &str| s.chars().count() as f32 * 20.0;
+        assert_eq!(
+            header_width(&mut big, "ab", " ↓2 ≡", 5.0),
+            7.0 * 20.0 + 11.0
+        );
+        assert_eq!(header_width(&mut m, "", "", 0.0), MIN_WIDTH);
     }
 
     #[test]
