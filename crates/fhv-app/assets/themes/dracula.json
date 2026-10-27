@@ -45,6 +45,10 @@
     "bg": "#45472a",
     "fg": "#f1fa8c"
   },
+  "group_header": {
+    "bg": "#3b3f55",
+    "fg": "#f8f8f2"
+  },
   "rules": {
     "red": {
       "bg": "#4d2229",

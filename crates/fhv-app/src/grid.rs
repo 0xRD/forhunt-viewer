@@ -54,7 +54,22 @@ pub trait GridSource {
     fn cell_tip(&self, _row: u64, _col: usize) -> Option<String> {
         None
     }
+    /// The row is a group header (grouping, D-075): drawn across the
+    /// whole width instead of cells.
+    fn group_row(&self, _row: u64) -> Option<GroupRow> {
+        None
+    }
 }
+
+/// A group header row: nesting level, label, open or collapsed.
+pub struct GroupRow {
+    pub depth: usize,
+    pub text: String,
+    pub expanded: bool,
+}
+
+/// Width of one nesting level of group headers, and of their arrow.
+const GROUP_INDENT: f32 = 16.0;
 
 /// Look of one cell drawn over the row background.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -260,6 +275,8 @@ pub struct GridResponse {
     pub header_moved: Option<(usize, usize, bool)>,
     /// Double-click on a header's right edge: display column to auto-size.
     pub autosize: Option<usize>,
+    /// A group header to open / close: (row, Some(open) or None = toggle).
+    pub group_toggle: Option<(u64, Option<bool>)>,
 }
 
 pub struct Callbacks<'a> {
@@ -379,7 +396,16 @@ pub fn show(
             state.top -= scroll.y as f64 / st.row_h as f64;
             state.scroll_x -= scroll.x;
         }
-        let [down, up, pgdn, pgup, home, end, left, right] = keys;
+        let [down, up, pgdn, pgup, home, end, mut left, mut right] = keys;
+        // Left / right close / open the selected group header.
+        if (left || right)
+            && !shift
+            && let Some(r) = state.selected
+            && src.group_row(r).is_some()
+        {
+            resp.group_toggle = Some((r, Some(right)));
+            (left, right) = (false, false);
+        }
         let last = n as i64 - 1;
         // Shift moves the far corner of the range, else the active cell.
         let from = if shift {
@@ -773,6 +799,38 @@ pub fn show(
                 visuals.widgets.hovered.bg_fill,
             );
         }
+        if let Some(g) = src.group_row(row) {
+            let pair = th.group_header.unwrap_or(th.chip);
+            body_p.rect_filled(rr, 0.0, pair.bg.0);
+            if row_sel || state.selected == Some(row) {
+                body_p.rect_filled(rr, 0.0, range_fill);
+            }
+            if state.selected == Some(row) {
+                body_p.rect_stroke(
+                    rr,
+                    0.0,
+                    Stroke::new(1.5, th.active_cell.0),
+                    StrokeKind::Inside,
+                );
+            }
+            body_p.line_segment([rr.left_bottom(), rr.right_bottom()], grid_line);
+            let x = body.min.x + st.pad + g.depth as f32 * GROUP_INDENT;
+            body_p.text(
+                pos2(x, rr.center().y),
+                Align2::LEFT_CENTER,
+                if g.expanded { "▼" } else { "▶" },
+                st.font.clone(),
+                pair.fg.0,
+            );
+            body_p.text(
+                pos2(x + GROUP_INDENT, rr.center().y),
+                Align2::LEFT_CENTER,
+                display_text(&g.text),
+                st.font.clone(),
+                pair.fg.0,
+            );
+            continue;
+        }
         if state.selected == Some(row) && !multi {
             body_p.rect_filled(rr, 0.0, sel_fill);
         } else if let Some(c) = src.row_color(row) {
@@ -976,6 +1034,14 @@ pub fn show(
         }
         if outer.double_clicked() {
             resp.double_clicked = Some(row);
+        }
+        // A click on a group header's arrow, or a double click on it,
+        // opens / closes it.
+        if let Some(g) = src.group_row(row) {
+            let arrow_end = body.min.x + st.pad + (g.depth + 1) as f32 * GROUP_INDENT;
+            if outer.double_clicked() || outer.clicked() && p.x < arrow_end {
+                resp.group_toggle = Some((row, None));
+            }
         }
         outer.request_focus();
     }

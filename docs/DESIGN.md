@@ -108,6 +108,24 @@ It reads from page cache; fusing it with pass 1 is a measured option.
 - Other columns sort by `(key prefix u64, row)` and resolve ties by comparing
   the full cell from the mapping.
 
+**Grouping** (`group.rs`, D-076).
+- Nested levels (first = outermost) over the rows of the current view.
+  Each level gives every view row a value code: from the dictionary's
+  bitmaps when the column has one (no file read), else from a parallel,
+  cancellable block scan with per-block value maps merged in order.
+- Blank cells (ASCII whitespace only) form one `(blank)` group; other
+  values group by their exact decoded text.
+- Codes are combined level by level into (parent, value) nodes with
+  counts, siblings are ordered per level (value, or count with value as
+  tie-break), and the tree is laid out in preorder. A counting sort over
+  the view's order puts the rows in group order, so each leaf group is a
+  contiguous range of display positions and keeps the row sort.
+- Memory: 8 B per view row plus, for dictionary levels and sorted views,
+  a transient 4 B per file row; no cells. More than 1,000,000 groups is an
+  error shown in the UI (no partial grouping).
+- Property tests check counts, nesting, group order and row order against
+  a naive implementation (`tests/group.rs`).
+
 **Index cache.**
 - Key: canonical path + size + mtime + BLAKE3 of sampled blocks (first / middle
   / last 64 KiB).
@@ -134,6 +152,13 @@ the error shown in the UI.
 - **Global search.** Ctrl+F, highlight, next/prev.
 - **Columns.** Chooser (show/hide, drag reorder), resize, freeze first N columns.
 - **Sorting.** Click a header to sort, shift-click to add a secondary key.
+- **Grouping** (`groups.rs`, D-075). Header menu "Group by this column",
+  repeatable; a group bar with the levels (sort per level, move, remove,
+  expand / collapse all). The grid's rows become *lines*: group headers
+  interleaved with the data rows of open groups, mapped by one segment per
+  visible header and open leaf (bisection), so memory is per group, not
+  per row. Selection, copy, tagging and export take data lines only;
+  export writes the whole view in group order (D-077).
 - **Detail pane.** Key/value view; JSON cells pretty-printed; copy cell, row or
   column.
 - **Tags.** A checkbox column and per-row notes; filter on tagged rows.

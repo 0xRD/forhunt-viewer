@@ -124,13 +124,31 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   background (the header shows the progress). Coloring rules win over the
   fill (the bar stays). At most 2,097,152 distinct values are counted per
   column (the header says "capped" past that).
+- **Grouping.** Right-click a header > *Group by this column*, then again
+  on other columns for nested groups (first chosen = outermost, like
+  `Channel > EventId > User`). Group header rows show the value and the
+  number of rows after the active filters, search and query, at every
+  level; blank cells form a `(blank)` group. The group bar above the grid
+  shows the levels in order: click one to sort its groups by value or by
+  count (ascending / descending, per level; rows inside a group keep the
+  row sort), move it in or out, or remove it; *Expand all* / *Collapse
+  all* / *Clear grouping*. Click a header's arrow (or double-click it, or
+  Left / Right on a selected header) to close / open it. Right-click a
+  group header: *Filter to this group* (exact-value chips) or *Exclude
+  this group* (a chip for an outer group, a `NOT (...)` query term for a
+  nested one). Selection, copy, tagging and export skip the header rows;
+  *Export* writes the view's rows flattened in group order (collapsed
+  groups included). Grouping is saved in sessions. Indexed (dictionary)
+  columns are counted from their index; others are read in a parallel
+  pass with progress (Esc cancels). Past 1,000,000 groups the grouping is
+  refused with a warning in the group bar.
 - **Tags and notes** on rows; "tagged only" filter.
 - **Bad rows** (wrong field count, broken quotes) are counted and can be
   shown. A malformed file never crashes the viewer.
 - **Export** of the current view, the tagged rows or the selection to CSV
-  or JSONL (visible columns, display order).
+  or JSONL (visible columns, display order; grouped: in group order).
 - **Sessions.** Save and restore filters (query included), columns, sort,
-  tags, coloring rules and duplicate highlights as JSON.
+  grouping, tags, coloring rules and duplicate highlights as JSON.
 
 - **Files.**
   - Tabs, drag and drop, recent files.
@@ -343,6 +361,7 @@ TargetUserName is not blank AND NOT (IpAddress = "-" OR IpAddress = "::1")
 | Ctrl+C | copy the selection in the default format (one cell: its value) |
 | Ctrl+Shift+C | copy the active row as indented JSON (right-click a cell for tab-separated) |
 | click / Shift+click a header | sort / add a sort column |
+| Left / Right on a group header, click its arrow, double-click it | close / open the group |
 | right click | header and cell menus |
 | Esc | cancel the running operation |
 | Ctrl+= / Ctrl+- / Ctrl+0, Ctrl+wheel | grid font larger / smaller / default size |

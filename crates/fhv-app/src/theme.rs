@@ -137,6 +137,10 @@ pub struct Theme {
     pub unique: Pair,
     /// Highlighted field in the detail pane.
     pub detail_highlight: Pair,
+    /// Group header rows of the grid (absent in older user themes: the
+    /// chip colors).
+    #[serde(default)]
+    pub group_header: Option<Pair>,
     /// Coloring-rule palette.
     pub rules: Rules,
 }
@@ -341,6 +345,7 @@ impl Theme {
             ("duplicate", self.duplicate),
             ("unique", self.unique),
             ("detail_highlight", self.detail_highlight),
+            ("group_header", self.group_header.unwrap_or(self.chip)),
         ]
         .into_iter()
         .chain(self.rules.named())

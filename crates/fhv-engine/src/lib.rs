@@ -8,6 +8,7 @@ pub mod dialect;
 pub mod dupes;
 pub mod export;
 pub mod filter;
+pub mod group;
 pub mod index;
 pub mod progress;
 pub mod query;

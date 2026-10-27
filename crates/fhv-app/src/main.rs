@@ -17,6 +17,7 @@ mod datefmt;
 mod dupes;
 mod fonts;
 mod grid;
+mod groups;
 #[cfg(target_os = "macos")]
 mod macos;
 mod querybar;
@@ -33,6 +34,8 @@ mod ui_tests;
 mod ui_tests_appearance;
 #[cfg(test)]
 mod ui_tests_columns;
+#[cfg(test)]
+mod ui_tests_groups;
 #[cfg(test)]
 mod ui_tests_rules;
 #[cfg(test)]

@@ -156,7 +156,7 @@ fn global_search_highlights_and_navigates() {
     });
     // msg 99, msg 990..999 -> 11 rows.
     assert_eq!(h.state().tabs[0].search_hits.as_ref().unwrap().len(), 11);
-    let p = h.state().tabs[0].find_hit(true).unwrap();
+    let p = h.state_mut().tabs[0].find_hit(true).unwrap();
     assert_eq!(h.state().tabs[0].view.row_at(p), Some(99));
 }
 

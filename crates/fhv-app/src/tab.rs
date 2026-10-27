@@ -123,7 +123,11 @@ pub enum JobKind {
 pub enum JobResult {
     /// The view, and the (blank, unparsable) cell counts of the columns
     /// with an active range condition (rows those conditions exclude).
-    View(View, Vec<(usize, (u64, u64))>),
+    View(
+        View,
+        Vec<(usize, (u64, u64))>,
+        Option<crate::groups::Outcome>,
+    ),
     Hits(RoaringBitmap),
     Exported(u64),
     Text(String, u64),
@@ -135,6 +139,8 @@ pub struct Job {
     rx: Receiver<Result<JobResult, String>>,
     /// The query that produced this job (to tell stale results).
     pub query: Option<Query>,
+    /// Group levels of a query job.
+    pub groups: Vec<fhv_engine::group::Level>,
 }
 
 /// (data row, number column) and the number shown.
@@ -206,6 +212,12 @@ pub struct Tab {
     pub colors: crate::rules::TabRules,
     /// Duplicate / unique highlighting per column (D-066).
     pub dupes: crate::dupes::Dupes,
+    /// Grouping: levels, tree and grid lines (D-075).
+    pub groups: crate::groups::GroupState,
+    /// Grouped grid: index in `rows` of each prepared line (None for a
+    /// group header), from line `slots_first`.
+    slots: Vec<Option<u64>>,
+    slots_first: u64,
     /// Status-bar count / sum of the cell selection it was computed for.
     pub sel_stats: Option<(crate::selection::CellSel, Option<(u64, f64)>)>,
 }
@@ -311,6 +323,9 @@ impl Tab {
             query: Default::default(),
             colors: Default::default(),
             dupes: Default::default(),
+            groups: Default::default(),
+            slots: Vec::new(),
+            slots_first: 0,
             clipboard: None,
             sel_stats: None,
             bad: None,
@@ -564,6 +579,7 @@ impl Tab {
             started: Instant::now(),
             rx,
             query,
+            groups: Vec::new(),
         });
     }
 
@@ -604,10 +620,12 @@ impl Tab {
         cols: Vec<usize>,
         fmt: fhv_engine::export::Format,
     ) {
+        let lines = self.groups.lines.clone();
         self.export_rows(path, cols, fmt, move |view| {
             positions
                 .iter()
                 .flat_map(|r| r.clone())
+                .filter_map(|l| crate::groups::pos_at(lines.as_deref(), l))
                 .map_while(|p| view.row_at(p))
                 .collect()
         });
@@ -651,7 +669,10 @@ impl Tab {
     /// shown (not a typing pause, not a failed or cancelled query); else
     /// says why `what` did not happen.
     fn view_is_current(&mut self, what: &str) -> bool {
-        if self.pending || self.last_query.as_ref() != Some(&self.query()) {
+        if self.pending
+            || self.last_query.as_ref() != Some(&self.query())
+            || self.groups.levels != self.groups.applied
+        {
             self.status = Some(format!(
                 "{what}: the current filter / sort is not applied yet or failed; \
                  wait for it (or fix it), then try again"
@@ -756,22 +777,50 @@ impl Tab {
                         .as_ref()
                         .map(|j| j.started.elapsed().as_secs_f64() * 1e3);
                     match r {
-                        Ok(JobResult::View(v, counts)) => {
+                        Ok(JobResult::View(v, counts, grouped)) => {
                             self.excluded = counts.into_iter().collect();
-                            let sel_row = self.grid.selected.and_then(|p| self.view.row_at(p));
-                            self.view = v;
+                            let sel_row = self.grid.selected.and_then(|p| self.row_at(p));
+                            let (q, levels) =
+                                job.map_or((None, Vec::new()), |j| (j.query, j.groups));
+                            let mut tree = None;
+                            self.groups.warning = None;
+                            self.view = match grouped {
+                                None => {
+                                    if let Some(q) = &q {
+                                        self.groups.base = Some((q.clone(), v.clone()));
+                                    }
+                                    v
+                                }
+                                Some(o) => {
+                                    if let Some(q) = &q {
+                                        self.groups.base = Some((q.clone(), o.base.clone()));
+                                    }
+                                    match o.result {
+                                        Ok((gv, g)) => {
+                                            tree = Some(g);
+                                            gv
+                                        }
+                                        Err(e) => {
+                                            self.groups.warning = Some(e);
+                                            o.base
+                                        }
+                                    }
+                                }
+                            };
+                            self.groups.applied = levels;
+                            self.groups.set_tree(tree);
                             self.update_hits();
                             self.view_gen += 1;
                             self.last_ms = ms;
-                            self.last_query = job.and_then(|j| j.query);
+                            self.last_query = q;
                             // Keep the selected row selected if still shown.
-                            self.grid.selected = sel_row.and_then(|r| self.view.position_of(r));
+                            self.grid.selected = sel_row.and_then(|r| self.line_of_row(r));
                             // Ranges are display positions (D-060).
                             self.grid.clear_ranges();
                             if let Some(p) = self.grid.selected {
                                 crate::grid::scroll_to(&mut self.grid, p);
                             } else {
-                                self.grid.top = self.grid.top.min(self.view.len() as f64);
+                                self.grid.top = self.grid.top.min(self.line_count() as f64);
                             }
                         }
                         Ok(JobResult::Hits(b)) => {
@@ -824,20 +873,52 @@ impl Tab {
             if self.pending {
                 self.pending = false;
                 let q = self.query();
+                let levels = self.groups.levels.clone();
                 if self.last_query.as_ref() != Some(&q)
+                    || self.groups.applied != levels
                     || self.view.is_empty() && self.table.row_count() > 0
                 {
                     let engine = self.engine.clone();
                     let q2 = q.clone();
                     let ranged = self.range_columns();
+                    // Only the grouping changed: group the last view again.
+                    let base = self
+                        .groups
+                        .base
+                        .as_ref()
+                        .filter(|(bq, _)| *bq == q && self.last_query.as_ref() == Some(&q))
+                        .map(|(_, v)| v.clone());
+                    let done = self.groups.done.clone();
+                    done.store(0, std::sync::atomic::Ordering::Relaxed);
+                    let lv = levels.clone();
                     self.spawn(JobKind::Query, Some(q), move || {
-                        let v = fhv_engine::view::run(&engine, &q2).map_err(|e| e.to_string())?;
+                        let v = match base {
+                            Some(v) => v,
+                            None => {
+                                fhv_engine::view::run(&engine, &q2).map_err(|e| e.to_string())?
+                            }
+                        };
                         let mut counts = Vec::new();
                         for c in ranged {
                             counts.push((c, engine.unparsable(c).map_err(|e| e.to_string())?));
                         }
-                        Ok(JobResult::View(v, counts))
+                        if lv.is_empty() {
+                            return Ok(JobResult::View(v, counts, None));
+                        }
+                        let result = match fhv_engine::group::group(&engine, &v, &lv, &done) {
+                            Ok((gv, g)) => Ok((gv, Arc::new(g))),
+                            Err(fhv_engine::Error::Cancelled) => return Err("cancelled".into()),
+                            Err(e) => Err(e.to_string()),
+                        };
+                        Ok(JobResult::View(
+                            v.clone(),
+                            counts,
+                            Some(crate::groups::Outcome { base: v, result }),
+                        ))
                     });
+                    if let Some(j) = &mut self.job {
+                        j.groups = levels;
+                    }
                 }
             } else if !self.search.is_empty() && self.hits_for != self.search {
                 self.start_search();
@@ -879,6 +960,10 @@ impl Tab {
         }
         self.job.as_ref().map(|j| {
             let what = match &j.kind {
+                JobKind::Query if !self.groups.levels.is_empty() => format!(
+                    "filtering / sorting / grouping ({} rows grouped, Esc cancels)",
+                    crate::app::fmt_n(self.groups.done.load(std::sync::atomic::Ordering::Relaxed))
+                ),
                 JobKind::Query => "filtering / sorting".to_string(),
                 JobKind::Search => "searching".to_string(),
                 JobKind::CopyColumn => "copying column values".to_string(),
@@ -1011,9 +1096,11 @@ impl Tab {
     /// Tags the rows at the given display positions (at most 1 M).
     pub fn tag_positions(&mut self, positions: &[Range<u64>]) {
         const MAX: usize = 1_000_000;
+        let lines = self.groups.lines.clone();
         let rows: Vec<u32> = positions
             .iter()
             .flat_map(|r| r.clone())
+            .filter_map(|l| crate::groups::pos_at(lines.as_deref(), l))
             .map_while(|p| self.view.row_at(p))
             .take(MAX + 1)
             .collect();
@@ -1035,13 +1122,19 @@ impl Tab {
     }
 
     /// Next / previous display position holding a search hit.
-    pub fn find_hit(&self, forward: bool) -> Option<u64> {
+    /// Grid line of the next / previous search hit (its group is opened).
+    pub fn find_hit(&mut self, forward: bool) -> Option<u64> {
+        let p = self.find_hit_pos(forward)?;
+        Some(self.reveal_pos(p))
+    }
+
+    fn find_hit_pos(&self, forward: bool) -> Option<u64> {
         let hits = self.search_hits.as_ref()?;
         let n = self.view.len();
         if n == 0 || hits.is_empty() {
             return None;
         }
-        let cur = self.grid.selected;
+        let cur = self.grid.selected.and_then(|l| self.pos_near(l));
         match &self.view.order {
             None => {
                 let shown = &*self.view.rows & &**hits;
@@ -1078,6 +1171,82 @@ impl Tab {
         }
     }
 
+    /// Grid lines: data rows, plus group headers when grouped.
+    pub fn line_count(&self) -> u64 {
+        match &self.groups.lines {
+            Some(l) => l.len(),
+            None => self.view.len(),
+        }
+    }
+
+    /// Display position of the data row at grid line `line` (None: a
+    /// group header, or past the end).
+    pub fn pos_at(&self, line: u64) -> Option<u64> {
+        crate::groups::pos_at(self.groups.lines.as_deref(), line)
+    }
+
+    /// Data row at grid line `line`.
+    pub fn row_at(&self, line: u64) -> Option<u32> {
+        self.view.row_at(self.pos_at(line)?)
+    }
+
+    /// Display position at or after line `line` (a header: its first row).
+    fn pos_near(&self, line: u64) -> Option<u64> {
+        match (self.groups.lines.as_deref(), &self.groups.tree) {
+            (Some(l), Some(g)) => match l.at(line)? {
+                crate::groups::Line::Data(p) => Some(p),
+                crate::groups::Line::Header(n) => Some(g.nodes[n].start),
+            },
+            _ => Some(line),
+        }
+    }
+
+    /// Grid line of data row `r`, if shown (its group open).
+    pub fn line_of_row(&self, r: u32) -> Option<u64> {
+        let p = self.view.position_of(r)?;
+        match &self.groups.lines {
+            Some(l) => l.line_of_pos(p),
+            None => Some(p),
+        }
+    }
+
+    /// Grid line of display position `pos`, opening its groups if needed.
+    pub fn reveal_pos(&mut self, pos: u64) -> u64 {
+        if self.groups.reveal(pos) {
+            self.lines_changed();
+        }
+        match &self.groups.lines {
+            Some(l) => l.line_of_pos(pos).unwrap_or(0),
+            None => pos,
+        }
+    }
+
+    /// Opens / closes the group header at line `line` (None: toggles).
+    pub fn toggle_group(&mut self, line: u64, open: Option<bool>) {
+        let Some(crate::groups::Line::Header(n)) =
+            self.groups.lines.as_deref().and_then(|l| l.at(line))
+        else {
+            return;
+        };
+        if self.groups.set_open(n, open) {
+            self.groups.rebuild();
+            self.lines_changed();
+            // The header keeps the selection.
+            if let Some(l) = self.groups.lines.as_deref().and_then(|l| l.line_of_node(n)) {
+                self.grid.selected = Some(l);
+                self.grid.clear_ranges();
+            }
+        }
+    }
+
+    /// The grid lines changed (groups opened / closed): ranges are lines.
+    pub fn lines_changed(&mut self) {
+        self.rows_key = None;
+        self.view_gen += 1;
+        self.grid.clear_ranges();
+        self.grid.top = self.grid.top.min(self.line_count() as f64);
+    }
+
     /// Adapter for the grid.
     pub fn source<'a>(&'a mut self, tz: &'a tz::Display, tagged: Color32) -> TabSource<'a> {
         TabSource {
@@ -1096,7 +1265,7 @@ pub struct TabSource<'a> {
 
 impl GridSource for TabSource<'_> {
     fn row_count(&self) -> u64 {
-        self.tab.view.len()
+        self.tab.line_count()
     }
 
     fn column_count(&self) -> usize {
@@ -1167,7 +1336,6 @@ impl GridSource for TabSource<'_> {
             rows.clone()
                 .map(|p| {
                     self.tab
-                        .view
                         .row_at(p)
                         .map_or(String::new(), |r| (r as u64 + 1).to_string())
                 })
@@ -1180,20 +1348,37 @@ impl GridSource for TabSource<'_> {
             return;
         }
         let tab = &mut *self.tab;
-        let ids: Vec<u32> = rows.clone().filter_map(|p| tab.view.row_at(p)).collect();
+        // Grouped: header lines have no row; `rows` holds the data lines
+        // at slots 0.. (D-075).
+        let grouped = tab.groups.lines.is_some();
+        tab.slots.clear();
+        tab.slots_first = rows.start;
+        let mut ids: Vec<u32> = Vec::new();
+        for l in rows.clone() {
+            match tab.row_at(l) {
+                Some(r) => {
+                    tab.slots.push(Some(ids.len() as u64));
+                    ids.push(r);
+                }
+                None => tab.slots.push(None),
+            }
+        }
+        let first = if grouped { 0 } else { rows.start };
         let contiguous = ids.windows(2).all(|w| w[1] == w[0] + 1);
         let r = if contiguous
+            && !grouped
             && !ids.is_empty()
             && ids[0] as u64 == rows.start
             && tab.view.order.is_none()
         {
             tab.table.read_rows(rows.clone(), &mut tab.rows)
         } else {
-            tab.table.read_row_list(rows.start, &ids, &mut tab.rows)
+            tab.table.read_row_list(first, &ids, &mut tab.rows)
         };
         if r.is_err() {
             return;
         }
+        let rows = first..first + ids.len() as u64;
         // Rules and duplicate counts look at the file's text.
         crate::rules::paint(tab, rows.clone());
         // Display time zone for time columns, and parsed times of columns
@@ -1219,7 +1404,7 @@ impl GridSource for TabSource<'_> {
     fn cell(&self, row: u64, col: usize) -> &str {
         match col {
             DC_TAG => {
-                let r = self.tab.view.row_at(row);
+                let r = self.tab.row_at(row);
                 if r.is_some_and(|r| self.tab.tags.contains_key(&r)) {
                     "★"
                 } else {
@@ -1231,19 +1416,20 @@ impl GridSource for TabSource<'_> {
                 .nums
                 .get(row.wrapping_sub(self.tab.nums_first) as usize)
                 .map_or("", String::as_str),
-            _ => match self.tab.file_col(col) {
-                Some(c) => self.tab.rows.cell(row, c),
-                None => "",
+            _ => match (self.tab.file_col(col), self.slot(row)) {
+                (Some(c), Some(k)) => self.tab.rows.cell(k, c),
+                _ => "",
             },
         }
     }
 
     fn row_color(&self, row: u64) -> Option<Color32> {
         // A row rule wins over the tagged color (the star stays).
-        if let Some(c) = crate::rules::row_color(self.tab, row) {
+        let k = self.slot(row)?;
+        if let Some(c) = crate::rules::row_color(self.tab, k) {
             return Some(c);
         }
-        let r = self.tab.view.row_at(row)?;
+        let r = self.tab.row_at(row)?;
         if self.tab.tags.contains_key(&r) {
             return Some(self.tagged);
         }
@@ -1251,13 +1437,38 @@ impl GridSource for TabSource<'_> {
     }
 
     fn cell_style(&self, row: u64, col: usize) -> crate::grid::CellStyle {
-        match self.tab.file_col(col) {
-            Some(c) => crate::rules::cell_style(self.tab, row, c),
-            None => Default::default(),
+        match (self.tab.file_col(col), self.slot(row)) {
+            (Some(c), Some(k)) => crate::rules::cell_style(self.tab, k, c),
+            _ => Default::default(),
         }
     }
 
     fn cell_tip(&self, row: u64, col: usize) -> Option<String> {
-        crate::rules::cell_tip(self.tab, row, self.tab.file_col(col)?)
+        crate::rules::cell_tip(self.tab, self.slot(row)?, self.tab.file_col(col)?)
+    }
+
+    fn group_row(&self, row: u64) -> Option<crate::grid::GroupRow> {
+        let g = &self.tab.groups;
+        match g.lines.as_deref()?.at(row)? {
+            crate::groups::Line::Header(n) => Some(crate::grid::GroupRow {
+                depth: g.tree.as_ref()?.nodes[n].depth as usize,
+                text: g.label(self.tab, n),
+                expanded: g.is_open(n),
+            }),
+            crate::groups::Line::Data(_) => None,
+        }
+    }
+}
+
+impl TabSource<'_> {
+    /// Index in the prepared rows of grid line `line`.
+    fn slot(&self, line: u64) -> Option<u64> {
+        if self.tab.groups.lines.is_none() {
+            return Some(line);
+        }
+        *self
+            .tab
+            .slots
+            .get(line.checked_sub(self.tab.slots_first)? as usize)?
     }
 }

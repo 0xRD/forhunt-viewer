@@ -990,6 +990,7 @@ impl App {
             }
             t.requery();
         }
+        crate::groups::bar(ui, t);
     }
 
     fn status_bar(&mut self, ui: &mut Ui) {
@@ -1012,7 +1013,7 @@ impl App {
             if let Some(ms) = t.last_ms {
                 ui.label(RichText::new(format!("({ms:.0} ms)")).weak());
             }
-            if let Some(r) = t.grid.selected.and_then(|p| t.view.row_at(p)) {
+            if let Some(r) = t.grid.selected.and_then(|p| t.row_at(p)) {
                 let col = t.num_col().map(|c| t.table.columns[c].clone());
                 ui.separator();
                 ui.label(format!("row {}", t.row_number(r)))
@@ -1090,7 +1091,7 @@ impl App {
         let Some(t) = self.tabs.get_mut(self.active) else {
             return;
         };
-        let Some(row) = t.grid.selected.and_then(|p| t.view.row_at(p)) else {
+        let Some(row) = t.grid.selected.and_then(|p| t.row_at(p)) else {
             ui.label(RichText::new("Select a row").weak());
             return;
         };
@@ -1300,6 +1301,9 @@ impl App {
         let file_col = |dc: usize| dc.checked_sub(DC_FIRST).and_then(|i| order.get(i).copied());
         let has_forhunt = forhunt_col(t).is_some();
         let dup_modes: Vec<_> = (0..t.table.columns.len()).map(|c| t.dupes.get(c)).collect();
+        let group_levels = t.groups.levels.clone();
+        let group_lines = t.groups.lines.clone();
+        let group_action: std::cell::Cell<Option<crate::groups::Action>> = Default::default();
         t.colors.theme = Some(theme.clone());
 
         let resp = {
@@ -1397,6 +1401,9 @@ impl App {
                 if let Some((m, s)) = crate::dupes::menu(ui, dup_modes[c]) {
                     header_action = Some(HeaderAction::Dupes(c, m, s));
                 }
+                if ready && let Some(a) = crate::groups::header_menu(ui, &group_levels, c) {
+                    group_action.set(Some(a));
+                }
                 ui.separator();
                 match col_kinds[c] {
                     fhv_engine::columns::Kind::Time(f) => {
@@ -1418,6 +1425,14 @@ impl App {
             };
             let rows_mode = t.grid.rows_active && !t.grid.rows.set.is_empty();
             let mut cell_menu = |ui: &mut Ui, row: u64, dc: usize| {
+                if let Some(crate::groups::Line::Header(n)) =
+                    group_lines.as_deref().and_then(|l| l.at(row))
+                {
+                    if let Some(a) = crate::groups::row_menu(ui, n) {
+                        group_action.set(Some(a));
+                    }
+                    return;
+                }
                 if ui.button("Copy   Ctrl+C").clicked() {
                     cell_action = Some(CellAction::Copy(None, None));
                     ui.close();
@@ -1551,6 +1566,12 @@ impl App {
             let grid = &mut t.grid;
             crate::colorder::move_column(&mut t.order, &mut grid.frozen, dc, slot, frozen);
         }
+        if let Some((line, open)) = resp.group_toggle {
+            t.toggle_group(line, open);
+        }
+        if let Some(a) = group_action.take() {
+            crate::groups::apply(t, a);
+        }
         if let Some(dc) = resp.autosize
             && let Some(c) = t.file_col(dc)
         {
@@ -1558,7 +1579,7 @@ impl App {
         }
         if let Some((row, dc)) = resp.clicked_cell
             && dc == DC_TAG
-            && let Some(r) = t.view.row_at(row)
+            && let Some(r) = t.row_at(row)
         {
             t.toggle_tag(r);
         }
@@ -1609,18 +1630,18 @@ impl App {
                     copy_selected_row(ui.ctx(), t, tsv);
                 }
                 CellAction::Tag(row) => {
-                    if let Some(r) = t.view.row_at(row) {
+                    if let Some(r) = t.row_at(row) {
                         t.toggle_tag(r);
                     }
                 }
                 CellAction::Note(row) => {
-                    if let Some(r) = t.view.row_at(row) {
+                    if let Some(r) = t.row_at(row) {
                         t.tags.entry(r).or_default();
                         self.note_edit = Some((r, t.tags.get(&r).cloned().unwrap_or_default()));
                     }
                 }
                 CellAction::FilterEq(row, c, neg) => {
-                    if let Some(r) = t.view.row_at(row)
+                    if let Some(r) = t.row_at(row)
                         && let Ok(f) = t.table.row_fields(r as u64)
                     {
                         // Exactly this value (not its case variants).
@@ -1630,7 +1651,7 @@ impl App {
                     }
                 }
                 CellAction::ColorLike(row, c) => {
-                    if let Some(r) = t.view.row_at(row)
+                    if let Some(r) = t.row_at(row)
                         && let Ok(f) = t.table.row_fields(r as u64)
                     {
                         let p = fhv_engine::filter::Pred {
@@ -1644,7 +1665,7 @@ impl App {
                     }
                 }
                 CellAction::ForhuntShow(row) => {
-                    if let Some(r) = t.view.row_at(row) {
+                    if let Some(r) = t.row_at(row) {
                         match forhunt_show_command(t, r, &evidence) {
                             Some(Ok(cmd)) => {
                                 ui.ctx().copy_text(cmd);
@@ -2106,7 +2127,11 @@ impl App {
                     text.trim().replace(['_', ','], "").parse::<u64>(),
                     self.tabs.get_mut(self.active),
                 ) {
-                    match t.row_of_number(n).and_then(|r| t.view.position_of(r)) {
+                    match t
+                        .row_of_number(n)
+                        .and_then(|r| t.view.position_of(r))
+                        .map(|p| t.reveal_pos(p))
+                    {
                         Some(p) => {
                             t.grid.selected = Some(p);
                             grid::scroll_to(&mut t.grid, p);
@@ -2533,7 +2558,7 @@ fn row_tsv(t: &Tab, fields: &[String]) -> String {
 }
 
 fn copy_selected_row(ctx: &egui::Context, t: &mut Tab, tsv: bool) {
-    let Some(r) = t.grid.selected.and_then(|p| t.view.row_at(p)) else {
+    let Some(r) = t.grid.selected.and_then(|p| t.row_at(p)) else {
         return;
     };
     if let Ok(f) = t.table.row_fields(r as u64) {
@@ -2788,7 +2813,7 @@ impl App {
         {
             cpu_ms.push(c as f64 * 1e3);
         }
-        let n = t.view.len().max(1) as f64;
+        let n = t.line_count().max(1) as f64;
         if k % 50 < 40 {
             t.grid.top += 3.0;
         } else {

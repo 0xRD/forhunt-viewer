@@ -236,6 +236,8 @@ struct Reader {
     view: fhv_engine::View,
     order: Vec<usize>,
     tags: Arc<std::collections::BTreeMap<u32, String>>,
+    /// Grid lines of a grouped view (plan rows are lines).
+    lines: Option<Arc<crate::groups::Lines>>,
 }
 
 impl Reader {
@@ -245,6 +247,7 @@ impl Reader {
             view: t.view.clone(),
             order: t.order.clone(),
             tags: Arc::new(t.tags.clone()),
+            lines: t.groups.lines.clone(),
         }
     }
 
@@ -302,7 +305,13 @@ impl Reader {
             Ok(())
         };
         for p in positions {
-            let Some(r) = self.view.row_at(p) else { break };
+            let q = match crate::groups::pos_at(self.lines.as_deref(), p) {
+                Some(q) => q,
+                // Group headers are not data: skipped (D-077).
+                None if self.lines.as_ref().is_some_and(|l| p < l.len()) => continue,
+                None => break,
+            };
+            let Some(r) = self.view.row_at(q) else { break };
             chunk.push((p, r));
             if chunk.len() == 4096 {
                 flush(&mut chunk)?;
@@ -406,7 +415,7 @@ pub fn copy(
 
 /// The active cell's bare value (a tag's note, the row number).
 fn single_cell(t: &mut Tab) -> Option<String> {
-    let r = t.grid.selected.and_then(|p| t.view.row_at(p))?;
+    let r = t.grid.selected.and_then(|p| t.row_at(p))?;
     let dc = t.grid.selected_col;
     Some(match dc {
         DC_TAG => t.tags.get(&r).cloned().unwrap_or_default(),

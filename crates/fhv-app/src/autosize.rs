@@ -51,8 +51,8 @@ pub fn sample_positions(n: u64, visible: Range<u64>) -> Vec<u64> {
 /// Sizes the file columns `cols` and stores the widths like a manual resize.
 pub fn run(ui: &Ui, t: &mut Tab, st: &grid::Style, cols: &[usize]) {
     let top = t.grid.top.floor() as u64;
-    let pos = sample_positions(t.view.len(), top..top + t.grid.page_rows + 2);
-    let ids: Vec<u32> = pos.iter().filter_map(|&p| t.view.row_at(p)).collect();
+    let pos = sample_positions(t.line_count(), top..top + t.grid.page_rows + 2);
+    let ids: Vec<u32> = pos.iter().filter_map(|&p| t.row_at(p)).collect();
     let mut rows = Rows::default();
     rows.max_cell = 4096;
     if !ids.is_empty() && t.table.read_row_list(0, &ids, &mut rows).is_err() {

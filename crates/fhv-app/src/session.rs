@@ -47,6 +47,13 @@ pub struct Session {
     /// Duplicate / unique highlighting by column name (absent before 0.4).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub highlights: Vec<(String, crate::dupes::Mode, crate::dupes::Scope)>,
+    /// Group levels by column name, outermost first, with the order of
+    /// their groups (absent before 0.4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub group_by: Vec<(String, fhv_engine::group::GroupSort)>,
+    /// Groups start collapsed ("Collapse all").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub groups_collapsed: bool,
 }
 
 /// A column kind set by the analyst as text: a date format spec
@@ -130,6 +137,13 @@ pub fn capture(tab: &Tab) -> Session {
             .iter()
             .map(|(&c, x)| (name(c), x.mode, x.scope))
             .collect(),
+        group_by: tab
+            .groups
+            .levels
+            .iter()
+            .map(|l| (name(l.col), l.sort))
+            .collect(),
+        groups_collapsed: tab.groups.collapsed,
     }
 }
 
@@ -221,6 +235,19 @@ pub fn apply(tab: &mut Tab, s: &Session) -> Vec<String> {
             None => warn.push(format!("column {n} not in this file")),
         }
     }
+    tab.groups.levels.clear();
+    for (n, sort) in &s.group_by {
+        match tab.table.columns.iter().position(|c| c == n) {
+            Some(col) if tab.groups.level_of(col).is_none() => tab
+                .groups
+                .levels
+                .push(fhv_engine::group::Level { col, sort: *sort }),
+            Some(_) => {}
+            None => warn.push(format!("column {n} not in this file (grouping)")),
+        }
+    }
+    tab.groups.collapsed = s.groups_collapsed;
+    tab.groups.flipped.clear();
     tab.repaint_cells();
     tab.requery();
     warn
