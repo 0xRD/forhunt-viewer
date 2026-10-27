@@ -70,7 +70,11 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   *Row numbers*: Auto / Always show # / Never show #, remembered per file.
 - **Sorting.** Multi-column (click, shift-click), deterministic (ties keep
   file order).
-- **Columns.** Show/hide, reorder, resize. *Freeze N cols* (toolbar, or
+- **Columns.** Show/hide, reorder, resize. Drag a header to move the column (a line shows
+  the drop place, Esc cancels, the grid scrolls near its edges; a click still sorts); dropping
+  across the frozen edge moves the edge by one. Double-click a header's right edge, or use
+  *Auto-size column* / *Auto-size all columns* in the header menu, to fit the width to the
+  widest value (sample of visible + 256 spread rows, max 800 px). *Freeze N cols* (toolbar, or
   right-click a header > *Freeze up to here*) pins the first N columns at
   the left while you scroll sideways.
 - **Detail pane.** Every field of the selected row, including the extra

@@ -172,6 +172,8 @@ pub struct Tab {
     /// File columns in display order (hidden ones are absent).
     pub order: Vec<usize>,
     pub widths: HashMap<usize, f32>,
+    /// Hidden column -> the visible column it followed (D-070).
+    pub hidden_after: HashMap<usize, Option<usize>>,
     pub grid: GridState,
     pub(crate) rows: Rows,
     rows_key: Option<(u64, Range<u64>)>,
@@ -283,6 +285,7 @@ impl Tab {
             status: None,
             order: (0..ncols).collect(),
             widths,
+            hidden_after: HashMap::new(),
             grid: GridState::default(),
             // The grid shows at most a few hundred characters of a cell.
             rows: {
@@ -1047,6 +1050,10 @@ impl GridSource for TabSource<'_> {
             s.push_str(" (year?)");
         }
         s
+    }
+
+    fn movable(&self, col: usize) -> bool {
+        col >= DC_FIRST
     }
 
     fn header_tip(&self, col: usize) -> Option<String> {

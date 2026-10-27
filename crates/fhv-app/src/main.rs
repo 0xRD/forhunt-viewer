@@ -9,6 +9,8 @@
 
 mod app;
 mod appearance;
+mod autosize;
+mod colorder;
 mod convert;
 mod datefmt;
 mod fonts;
@@ -25,6 +27,8 @@ mod tz;
 mod ui_tests;
 #[cfg(test)]
 mod ui_tests_appearance;
+#[cfg(test)]
+mod ui_tests_columns;
 
 use std::path::PathBuf;
 

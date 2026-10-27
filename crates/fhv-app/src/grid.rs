@@ -11,8 +11,8 @@
 use std::ops::Range;
 
 use eframe::egui::{
-    Align2, Color32, CursorIcon, FontId, Id, Key, Pos2, Rect, Response, Sense, Stroke, StrokeKind,
-    Ui, pos2, vec2,
+    Align2, Color32, CursorIcon, FontId, Id, Key, Modifiers, Pos2, Rect, Response, Sense, Stroke,
+    StrokeKind, Ui, pos2, vec2,
 };
 
 /// Rows the grid displays. Row indices are display positions (after filter
@@ -35,6 +35,10 @@ pub trait GridSource {
     fn prepare(&mut self, rows: Range<u64>);
     /// Text of a cell of a prepared row. Must be cheap.
     fn cell(&self, row: u64, col: usize) -> &str;
+    /// The column can be dragged to another place (and dropped before it).
+    fn movable(&self, _col: usize) -> bool {
+        false
+    }
     /// Optional per-row background (tagged rows, bad rows).
     fn row_color(&self, _row: u64) -> Option<Color32> {
         None
@@ -54,8 +58,27 @@ pub struct GridState {
     pub page_rows: u64,
     /// Rows area at the last frame (tests).
     pub body: Rect,
+    /// x extents of the display columns and y of the header's middle, at
+    /// the last frame (tests aim the pointer with them).
+    pub col_x: Vec<(f32, f32)>,
+    pub header_y: f32,
     drag_thumb: Option<(f32, f64)>,
+    hdr_drag: Option<HdrDrag>,
 }
+
+/// A header press that may turn into a column drag.
+#[derive(Clone, Copy)]
+struct HdrDrag {
+    col: usize,
+    origin: Pos2,
+    /// Moved past the threshold: a drag, not a click.
+    active: bool,
+    /// Esc pressed: ignore the rest of the gesture.
+    cancelled: bool,
+}
+
+/// Pointer travel before a header press becomes a drag (a click sorts).
+const DRAG_THRESHOLD: f32 = 4.0;
 
 impl Default for GridState {
     fn default() -> Self {
@@ -68,7 +91,10 @@ impl Default for GridState {
             frozen: 0,
             page_rows: 1,
             body: Rect::NOTHING,
+            col_x: Vec::new(),
+            header_y: 0.0,
             drag_thumb: None,
+            hdr_drag: None,
         }
     }
 }
@@ -168,6 +194,11 @@ pub struct GridResponse {
     pub double_clicked: Option<u64>,
     /// Header click: (display column, shift held).
     pub header_clicked: Option<(usize, bool)>,
+    /// Header dragged: (display column, slot = gap before that display
+    /// column, dropped in the frozen zone).
+    pub header_moved: Option<(usize, usize, bool)>,
+    /// Double-click on a header's right edge: display column to auto-size.
+    pub autosize: Option<usize>,
 }
 
 pub struct Callbacks<'a> {
@@ -357,6 +388,8 @@ pub fn show(
     let view_w = (body.width() - frozen_w).max(0.0);
     state.scroll_x = state.scroll_x.clamp(0.0, (scroll_w - view_w).max(0.0));
     let (frozen_end, xs) = layout(state, body);
+    state.col_x = xs.clone();
+    state.header_y = full.min.y + st.header_h / 2.0;
     // Clip of a column: frozen columns over the left part, others right of it.
     let clip_for = |c: usize, r: Rect| -> Rect {
         let area = if c < state.frozen {
@@ -371,13 +404,54 @@ pub fn show(
     let header = Rect::from_min_max(full.min, pos2(body.max.x, full.min.y + st.header_h));
     painter.rect_filled(header, 0.0, visuals.widgets.noninteractive.bg_fill);
     let sep = Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color);
+    // Header drag in progress: threshold, Esc, drop. A drag that ends this
+    // frame also suppresses the click it ends with.
+    let mut drag_seen = false;
+    let mut handles = Vec::new();
+    if let Some(mut d) = state.hdr_drag {
+        let (pos, down) = ui.input(|i| (i.pointer.interact_pos(), i.pointer.primary_down()));
+        if d.active && !d.cancelled && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        {
+            d.cancelled = true;
+        }
+        if !d.active && pos.is_some_and(|p| p.distance(d.origin) >= DRAG_THRESHOLD) {
+            d.active = true;
+        }
+        if down {
+            state.hdr_drag = Some(d);
+        } else {
+            state.hdr_drag = None;
+            drag_seen = d.active;
+            if d.active
+                && !d.cancelled
+                && let Some(p) = pos
+            {
+                let (slot, frozen) = drop_slot(state, &xs, frozen_end, src, p.x);
+                if slot != d.col && slot != d.col + 1 || frozen != (d.col < state.frozen) {
+                    resp.header_moved = Some((d.col, slot, frozen));
+                }
+            }
+        }
+    }
     for (c, &(x0, x1)) in xs.iter().enumerate() {
         let r = Rect::from_min_max(pos2(x0, header.min.y), pos2(x1, header.max.y));
         let clip = clip_for(c, r);
         if clip.width() <= 0.0 {
             continue;
         }
-        let mut hr = ui.interact(clip, id.with(("hdr", c)), Sense::click());
+        let mut hr = ui.interact(clip, id.with(("hdr", c)), Sense::click_and_drag());
+        if hr.is_pointer_button_down_on()
+            && state.hdr_drag.is_none()
+            && src.movable(c)
+            && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+        {
+            state.hdr_drag = Some(HdrDrag {
+                col: c,
+                origin,
+                active: false,
+                cancelled: false,
+            });
+        }
         if hr.hovered()
             && let Some(tip) = src.header_tip(c)
         {
@@ -398,15 +472,24 @@ pub fn show(
             [pos2(x1 - 0.5, r.min.y + 3.0), pos2(x1 - 0.5, r.max.y - 3.0)],
             sep,
         );
-        if hr.clicked() {
+        if hr.clicked() && !drag_seen {
             let shift = ui.input(|i| i.modifiers.shift);
             resp.header_clicked = Some((c, shift));
         }
         hr.context_menu(|ui| (cb.header_menu)(ui, c));
-        let handle = Rect::from_center_size(pos2(x1, r.center().y), vec2(8.0, st.header_h))
-            .intersect(header);
+        handles.push((
+            c,
+            Rect::from_center_size(pos2(x1, r.center().y), vec2(8.0, st.header_h))
+                .intersect(header),
+        ));
+    }
+    // Resize handles are made after every header so they win the pointer.
+    for (c, handle) in handles {
         if handle.width() > 0.0 {
-            let h = ui.interact(handle, id.with(("resize", c)), Sense::drag());
+            let h = ui.interact(handle, id.with(("resize", c)), Sense::click_and_drag());
+            if h.double_clicked() {
+                resp.autosize = Some(c);
+            }
             if h.hovered() || h.dragged() {
                 ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
             }
@@ -515,6 +598,58 @@ pub fn show(
         );
     }
 
+    // Column drag: drop indicator, ghost of the header, edge auto-scroll.
+    if let Some(d) = state.hdr_drag.filter(|d| d.active && !d.cancelled)
+        && let Some(p) = ui.input(|i| i.pointer.interact_pos())
+    {
+        let th = crate::theme::current(ui.ctx());
+        let (slot, _) = drop_slot(state, &xs, frozen_end, src, p.x);
+        let x = match xs.get(slot) {
+            Some(r) => r.0,
+            None => xs.last().map_or(body.min.x, |r| r.1),
+        }
+        .clamp(body.min.x, body.max.x);
+        painter.line_segment(
+            [pos2(x, header.min.y), pos2(x, body.max.y)],
+            Stroke::new(2.0, th.accent.0),
+        );
+        if let Some(&(x0, x1)) = xs.get(d.col) {
+            let src_hdr = clip_for(
+                d.col,
+                Rect::from_min_max(pos2(x0, header.min.y), pos2(x1, header.max.y)),
+            );
+            painter.rect_filled(src_hdr, 0.0, th.hover.0.gamma_multiply(0.5));
+        }
+        let w = state.widths.get(d.col).copied().unwrap_or(100.0).min(220.0);
+        let ghost = Rect::from_center_size(pos2(p.x, header.center().y), vec2(w, st.header_h));
+        painter.rect_filled(ghost, 3.0, th.bg_window.0.gamma_multiply(0.9));
+        painter.rect_stroke(
+            ghost,
+            3.0,
+            Stroke::new(1.0, th.accent.0),
+            StrokeKind::Inside,
+        );
+        painter.with_clip_rect(ghost.shrink2(vec2(2.0, 0.0))).text(
+            pos2(ghost.min.x + st.pad, ghost.center().y),
+            Align2::LEFT_CENTER,
+            src.column_name(d.col),
+            FontId::proportional(13.0),
+            th.text_strong.0,
+        );
+        ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+        // Auto-scroll near the edges of the scrolling part.
+        const EDGE: f32 = 40.0;
+        let dt = ui.input(|i| i.stable_dt).min(0.1);
+        let left = (frozen_end + EDGE - p.x) / EDGE;
+        let right = (p.x - (body.max.x - EDGE)) / EDGE;
+        if left > 0.0 && p.x >= body.min.x {
+            state.scroll_x -= left.min(1.5) * 700.0 * dt;
+        } else if right > 0.0 {
+            state.scroll_x += right.min(1.5) * 700.0 * dt;
+        }
+        ui.ctx().request_repaint();
+    }
+
     // Scrollbar paint.
     painter.rect_filled(bar, 0.0, visuals.extreme_bg_color);
     let thumb = Rect::from_min_size(
@@ -574,6 +709,32 @@ pub fn show(
         }
     });
     resp
+}
+
+/// Where a header dropped at `x` lands: (slot, in the frozen zone).
+fn drop_slot(
+    state: &GridState,
+    xs: &[(f32, f32)],
+    frozen_end: f32,
+    src: &dyn GridSource,
+    x: f32,
+) -> (usize, bool) {
+    let n = xs.len();
+    let in_frozen = state.frozen > 0 && x < frozen_end;
+    let zone = if in_frozen {
+        0..state.frozen.min(n)
+    } else {
+        state.frozen.min(n)..n
+    };
+    let end = zone.end;
+    let mut slot = zone
+        .clone()
+        .find(|&c| src.movable(c) && x < (xs[c].0 + xs[c].1) / 2.0)
+        .unwrap_or(end);
+    let lo = (0..n).find(|&c| src.movable(c)).unwrap_or(0);
+    let hi = (0..n).rev().find(|&c| src.movable(c)).map_or(0, |c| c + 1);
+    slot = slot.clamp(lo, hi.max(lo));
+    (slot, in_frozen)
 }
 
 fn context_menu(r: &Response, add: impl FnOnce(&mut Ui)) {

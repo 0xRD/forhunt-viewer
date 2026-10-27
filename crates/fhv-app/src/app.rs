@@ -1299,6 +1299,18 @@ impl App {
                     header_action = Some(HeaderAction::Freeze(dc + 1));
                     ui.close();
                 }
+                if ui
+                    .button("Auto-size column")
+                    .on_hover_text("fit the width to the widest sampled value")
+                    .clicked()
+                {
+                    header_action = Some(HeaderAction::AutoSize(c));
+                    ui.close();
+                }
+                if ui.button("Auto-size all columns").clicked() {
+                    header_action = Some(HeaderAction::AutoSizeAll);
+                    ui.close();
+                }
                 if ui.button("Copy column values (view)").clicked() {
                     header_action = Some(HeaderAction::CopyColumn(c));
                     ui.close();
@@ -1422,6 +1434,15 @@ impl App {
             }
             t.requery();
         }
+        if let Some((dc, slot, frozen)) = resp.header_moved {
+            let grid = &mut t.grid;
+            crate::colorder::move_column(&mut t.order, &mut grid.frozen, dc, slot, frozen);
+        }
+        if let Some(dc) = resp.autosize
+            && let Some(c) = t.file_col(dc)
+        {
+            crate::autosize::run(ui, t, &self.style, &[c]);
+        }
         if let Some((row, dc)) = resp.clicked_cell
             && dc == DC_TAG
             && let Some(r) = t.view.row_at(row)
@@ -1434,7 +1455,14 @@ impl App {
                     t.sort = vec![SortKey { col: c, desc }];
                     t.requery();
                 }
-                HeaderAction::Hide(c) => t.order.retain(|&x| x != c),
+                HeaderAction::Hide(c) => {
+                    crate::colorder::hide(&mut t.order, &mut t.hidden_after, c)
+                }
+                HeaderAction::AutoSize(c) => crate::autosize::run(ui, t, &self.style, &[c]),
+                HeaderAction::AutoSizeAll => {
+                    let all = t.order.clone();
+                    crate::autosize::run(ui, t, &self.style, &all)
+                }
                 HeaderAction::Freeze(n) => t.grid.frozen = n,
                 HeaderAction::CopyColumn(c) => t.start_copy_column(c),
                 HeaderAction::DateFormat(c) => open_datefmt = Some(c),
@@ -1739,9 +1767,7 @@ impl App {
                 ui.horizontal(|ui| {
                     if ui.button("Show all").clicked() {
                         for c in 0..t.table.columns.len() {
-                            if !t.order.contains(&c) {
-                                t.order.push(c);
-                            }
+                            crate::colorder::show(&mut t.order, &mut t.hidden_after, c);
                         }
                     }
                     if ui.button("Reset order").clicked() {
@@ -1783,14 +1809,14 @@ impl App {
                         t.order.insert(b, c);
                     }
                     if let Some(c) = hide {
-                        t.order.retain(|&x| x != c);
+                        crate::colorder::hide(&mut t.order, &mut t.hidden_after, c);
                     }
                     ui.separator();
                     for c in 0..t.table.columns.len() {
                         if !t.order.contains(&c) {
                             let mut on = false;
                             if ui.checkbox(&mut on, &t.table.columns[c]).changed() && on {
-                                t.order.push(c);
+                                crate::colorder::show(&mut t.order, &mut t.hidden_after, c);
                             }
                         }
                     }
@@ -2111,6 +2137,8 @@ enum HeaderAction {
     Hide(usize),
     Freeze(usize),
     CopyColumn(usize),
+    AutoSize(usize),
+    AutoSizeAll,
 }
 
 enum CellAction {
