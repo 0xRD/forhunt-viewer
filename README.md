@@ -101,13 +101,37 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   follows the arrow keys; click a field name to select that cell in the
   grid (a hidden column's field is highlighted all the same).
   Copy cell / row / column.
+- **Coloring rules** (View > *Coloring rules…*, or right-click a cell >
+  *Color rows like this…*): a condition in the [query language](#query-language)
+  (`Info contains Critical`, `EventID in (4624, 4625)`, `* contains mimikatz`
+  for any column; case is ignored unless the condition ends with `cs`) plus a
+  color of the theme's rule palette (red, orange, yellow, green, teal, blue,
+  purple, gray: readable in every theme), as a fill and / or text color,
+  optionally bold, for the whole row or only the matching cells. Rules can
+  be disabled, reordered and deleted; the first rule covering a cell gives
+  its style. *Count rows* shows how many rows of the view match each
+  condition. Rules are saved in the settings and in sessions, and
+  *Export… / Import…* share a ruleset as JSON. Only the rows on screen are
+  evaluated, so scrolling costs the same with or without rules. The
+  selected row keeps its selection color.
+- **Duplicate / unique values**: right-click a header > *Highlight duplicates
+  / unique*: Off, duplicates (2+ times), unique values (once) or both, counted
+  over the filtered view (default) or the whole file; several columns at
+  once. Blank cells are ignored, case follows the query bar's Aa setting.
+  Cells get the theme's duplicate / unique color and a small bar at their
+  left edge; the tooltip gives the number of occurrences, the header tooltip
+  the totals. Dictionary columns are counted instantly, others in the
+  background (the header shows the progress). Coloring rules win over the
+  fill (the bar stays). At most 2,097,152 distinct values are counted per
+  column (the header says "capped" past that).
 - **Tags and notes** on rows; "tagged only" filter.
 - **Bad rows** (wrong field count, broken quotes) are counted and can be
   shown. A malformed file never crashes the viewer.
 - **Export** of the current view, the tagged rows or the selection to CSV
   or JSONL (visible columns, display order).
-- **Sessions.** Save and restore filters (query included), columns, sort
-  and tags as JSON.
+- **Sessions.** Save and restore filters (query included), columns, sort,
+  tags, coloring rules and duplicate highlights as JSON.
+
 - **Files.**
   - Tabs, drag and drop, recent files.
   - Encodings: UTF-8 (with or without BOM), UTF-16LE/BE, Windows-1252.

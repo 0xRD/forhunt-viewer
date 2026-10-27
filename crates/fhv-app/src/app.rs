@@ -149,6 +149,9 @@ pub struct App {
     pub(crate) appearance: crate::appearance::State,
     /// Window title last sent (a viewport command repaints: D-055).
     title: String,
+    /// Coloring rules editor, and the rules the tabs use (D-065).
+    pub(crate) rules_dlg: Option<crate::rules::Editor>,
+    pub(crate) rules: std::sync::Arc<Vec<crate::rules::Rule>>,
 }
 
 impl App {
@@ -194,11 +197,14 @@ impl App {
             fps: std::env::var_os("FHV_FPS").map(|_| (std::time::Instant::now(), 0)),
             appearance: crate::appearance::State::new(&dirs().config),
             title: String::new(),
+            rules_dlg: None,
+            rules: Default::default(),
             style: Style {
                 filter_h: 24.0,
                 ..Style::default()
             },
         };
+        app.rules = std::sync::Arc::new(app.settings.coloring_rules.clone());
         // Keep the cache bounded (oldest files first).
         let cache = app.cache_dir.clone();
         let _ = std::thread::Builder::new()
@@ -591,6 +597,14 @@ impl App {
                             }
                         }
                     });
+                }
+                if ui
+                    .button("Coloring rules…")
+                    .on_hover_text("color rows or cells that match conditions")
+                    .clicked()
+                {
+                    ui.close();
+                    self.rules_dlg.get_or_insert_with(Default::default);
                 }
                 if ui.button("Columns…").clicked() {
                     ui.close();
@@ -1215,7 +1229,8 @@ impl App {
     }
 
     fn grid(&mut self, ui: &mut Ui) {
-        let tagged = crate::theme::current(ui.ctx()).tagged.0;
+        let theme = crate::theme::current(ui.ctx());
+        let tagged = theme.tagged.0;
         let evidence = self.settings.evidence.clone();
         let Some(t) = self.tabs.get_mut(self.active) else {
             // Empty window: what can be opened, and how files combine.
@@ -1284,6 +1299,9 @@ impl App {
         let order = t.order.clone();
         let file_col = |dc: usize| dc.checked_sub(DC_FIRST).and_then(|i| order.get(i).copied());
         let has_forhunt = forhunt_col(t).is_some();
+        let dup_modes: Vec<_> = (0..t.table.columns.len()).map(|c| t.dupes.get(c)).collect();
+        t.colors.theme = Some(theme.clone());
+
         let resp = {
             let mut filter_cell = |ui: &mut Ui, dc: usize, rect: egui::Rect| {
                 let Some(c) = file_col(dc) else { return };
@@ -1376,6 +1394,9 @@ impl App {
                     header_action = Some(HeaderAction::CopyColumn(c));
                     ui.close();
                 }
+                if let Some((m, s)) = crate::dupes::menu(ui, dup_modes[c]) {
+                    header_action = Some(HeaderAction::Dupes(c, m, s));
+                }
                 ui.separator();
                 match col_kinds[c] {
                     fhv_engine::columns::Kind::Time(f) => {
@@ -1457,6 +1478,15 @@ impl App {
                         cell_action = Some(CellAction::FilterEq(row, c, true));
                         ui.close();
                     }
+                }
+                if let Some(c) = file_col(dc)
+                    && ui
+                        .button("Color rows like this…")
+                        .on_hover_text("new coloring rule: this column equals this value")
+                        .clicked()
+                {
+                    cell_action = Some(CellAction::ColorLike(row, c));
+                    ui.close();
                 }
                 if has_forhunt {
                     ui.separator();
@@ -1549,6 +1579,10 @@ impl App {
                 HeaderAction::Freeze(n) => t.grid.frozen = n,
                 HeaderAction::CopyColumn(c) => t.start_copy_column(c),
                 HeaderAction::DateFormat(c) => open_datefmt = Some(c),
+                HeaderAction::Dupes(c, m, s) => {
+                    t.dupes.set(c, m, s);
+                    t.repaint_cells();
+                }
             }
         }
         if let Some(a) = cell_action {
@@ -1593,6 +1627,20 @@ impl App {
                         let v = f.get(c).cloned().unwrap_or_default();
                         t.filters[c].filter_value(v, neg);
                         t.requery();
+                    }
+                }
+                CellAction::ColorLike(row, c) => {
+                    if let Some(r) = t.view.row_at(row)
+                        && let Ok(f) = t.table.row_fields(r as u64)
+                    {
+                        let p = fhv_engine::filter::Pred {
+                            target: fhv_engine::filter::Target::Column(c),
+                            op: Op::Equals(f.get(c).cloned().unwrap_or_default()),
+                            case_sensitive: true,
+                        };
+                        let when = fhv_engine::query::print_pred(&p, &t.table.columns, false)
+                            .unwrap_or_default();
+                        self.rules_dlg = Some(crate::rules::Editor::with_draft(when));
                     }
                 }
                 CellAction::ForhuntShow(row) => {
@@ -2209,6 +2257,12 @@ impl App {
         self.open(&s.file);
         if let Some(t) = self.tabs.iter_mut().find(|t| t.path == s.file) {
             let warn = session::apply(t, &s);
+            if let Some(r) = &s.rules {
+                self.settings.coloring_rules = r.clone();
+                self.rules = std::sync::Arc::new(r.clone());
+                t.set_rules(self.rules.clone());
+                self.settings.save();
+            }
             if !warn.is_empty() {
                 self.error = Some(warn.join("\n"));
             }
@@ -2254,6 +2308,7 @@ enum HeaderAction {
     CopyColumn(usize),
     AutoSize(usize),
     AutoSizeAll,
+    Dupes(usize, crate::dupes::Mode, crate::dupes::Scope),
 }
 
 enum CellAction {
@@ -2267,6 +2322,7 @@ enum CellAction {
     Note(u64),
     FilterEq(u64, usize, bool),
     ForhuntShow(u64),
+    ColorLike(u64, usize),
 }
 
 /// `forhunt show <id> -p <evidence>` for data row `r`: the evidence this
@@ -2649,6 +2705,8 @@ impl eframe::App for App {
         let mut running = self.poll_conversions();
         for t in &mut self.tabs {
             running |= t.poll(&tz);
+            t.set_rules(self.rules.clone());
+            running |= crate::dupes::poll(t, self.settings.query_case_sensitive);
             if let Some(text) = t.clipboard.take() {
                 ctx.copy_text(text);
             }
@@ -2689,6 +2747,16 @@ impl eframe::App for App {
         self.columns_window(&ctx);
         self.export_window(&ctx);
         self.small_dialogs(&ctx);
+        if crate::rules::window(
+            &ctx,
+            &mut self.rules_dlg,
+            &mut self.settings.coloring_rules,
+            self.tabs.get(self.active),
+        ) {
+            self.rules = std::sync::Arc::new(self.settings.coloring_rules.clone());
+            self.settings.save();
+        }
+
         self.appearance.settings_window(&ctx, &mut self.settings);
         if let Some((_, ui_ms, _)) = &mut self.bench
             && self

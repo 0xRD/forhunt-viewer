@@ -45,6 +45,25 @@ pub trait GridSource {
     fn row_color(&self, _row: u64) -> Option<Color32> {
         None
     }
+    /// Optional per-cell style (coloring rules, duplicate / unique values)
+    /// of a prepared row. Not applied on the selected row.
+    fn cell_style(&self, _row: u64, _col: usize) -> CellStyle {
+        CellStyle::default()
+    }
+    /// Tooltip of a cell of a prepared row.
+    fn cell_tip(&self, _row: u64, _col: usize) -> Option<String> {
+        None
+    }
+}
+
+/// Look of one cell drawn over the row background.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CellStyle {
+    pub bg: Option<Color32>,
+    pub fg: Option<Color32>,
+    pub bold: bool,
+    /// Small bar at the left edge (a cue that does not rely on the fill).
+    pub marker: Option<Color32>,
 }
 
 pub struct GridState {
@@ -767,6 +786,12 @@ pub fn show(
             if clip.width() <= 0.0 || clip.height() <= 0.0 {
                 continue;
             }
+            // Rule / duplicate fill, except on the selected row's own fill.
+            let cs = src.cell_style(row, c);
+            let selected = state.selected == Some(row) && !multi;
+            if let Some(bg) = cs.bg.filter(|_| !selected) {
+                body_p.rect_filled(clip_for(c, cell), 0.0, bg);
+            }
             // Selection over any cell background.
             if row_sel || (multi && state.cells.contains((row, c))) {
                 body_p.rect_filled(clip_for(c, cell), 0.0, range_fill);
@@ -779,10 +804,15 @@ pub fn show(
                     StrokeKind::Inside,
                 );
             }
+            if let Some(m) = cs.marker {
+                let bar = Rect::from_min_size(cell.min + vec2(1.0, 2.0), vec2(3.0, st.row_h - 4.0));
+                body_p.rect_filled(clip_for(c, bar), 1.0, m);
+            }
             let text = display_text(src.cell(row, c));
             if text.is_empty() {
                 continue;
             }
+            let text_color = cs.fg.filter(|_| !selected).unwrap_or(text_color);
             let p = body_p.with_clip_rect(clip);
             let galley = p.layout_no_wrap(text.to_string(), st.font.clone(), text_color);
             let origin = Pos2::new(cell.min.x + st.pad, cell.center().y - galley.size().y / 2.0);
@@ -803,6 +833,10 @@ pub fn show(
                         hl_fill,
                     );
                 }
+            }
+            if cs.bold {
+                // No bold face for every grid font: draw twice, offset.
+                p.galley(origin + vec2(0.6, 0.0), galley.clone(), text_color);
             }
             p.galley(origin, galley, text_color);
         }
@@ -944,6 +978,13 @@ pub fn show(
             resp.double_clicked = Some(row);
         }
         outer.request_focus();
+    }
+    if outer.hovered()
+        && let Some(p) = ui.input(|i| i.pointer.hover_pos())
+        && let Some((row, col)) = hit(p)
+        && let Some(tip) = src.cell_tip(row, col)
+    {
+        outer.clone().on_hover_text_at_pointer(tip);
     }
     let sel = state.selected;
     let sel_col = state.selected_col;

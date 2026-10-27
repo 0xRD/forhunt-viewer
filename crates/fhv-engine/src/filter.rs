@@ -528,7 +528,7 @@ const IN_PREFILTER_MAX: usize = 32;
 /// Kelvin sign all become `K`), so two strings are equal case-insensitively
 /// exactly when the regex crate's `(?i)` literal match says so (D-012).
 /// None when `b` is not UTF-8 (it cannot equal a UTF-8 value then).
-fn fold_simple(b: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn fold_simple(b: &[u8]) -> Option<Vec<u8>> {
     if b.is_ascii() {
         return Some(b.to_ascii_uppercase());
     }

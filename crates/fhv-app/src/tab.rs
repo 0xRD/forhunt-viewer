@@ -202,6 +202,10 @@ pub struct Tab {
     /// Query bar text, and the part of the last applied query that the
     /// column filters cannot hold (D-045).
     pub query: crate::querybar::QueryState,
+    /// Coloring rules and their results for the prepared rows (D-065).
+    pub colors: crate::rules::TabRules,
+    /// Duplicate / unique highlighting per column (D-066).
+    pub dupes: crate::dupes::Dupes,
     /// Status-bar count / sum of the cell selection it was computed for.
     pub sel_stats: Option<(crate::selection::CellSel, Option<(u64, f64)>)>,
 }
@@ -305,6 +309,8 @@ impl Tab {
             detected,
             rownum_mode: RowNumMode::Auto,
             query: Default::default(),
+            colors: Default::default(),
+            dupes: Default::default(),
             clipboard: None,
             sel_stats: None,
             bad: None,
@@ -392,6 +398,7 @@ impl Tab {
     pub fn set_kind(&mut self, c: usize, kind: Option<Kind>) {
         self.engine.set_kind(c, kind);
         self.rows_key = None;
+        self.colors.invalidate();
         self.formats_changed = true;
         // Same query, different meaning: run it again.
         self.last_query = None;
@@ -707,6 +714,7 @@ impl Tab {
         if self.tz.name != tz_name {
             self.tz = tz::Display::new(tz_name);
             self.rows_key = None;
+            self.colors.invalidate();
             // Time filters are read in the display zone.
             self.requery();
         }
@@ -717,6 +725,9 @@ impl Tab {
                     match r {
                         Ok(()) => {
                             self.pending = true;
+                            // Column kinds are known now.
+                            self.colors.invalidate();
+                            self.rows_key = None;
                             let n = self.table.row_count();
                             self.tags.retain(|r, _| (*r as u64) < n);
                         }
@@ -975,6 +986,18 @@ impl Tab {
         }
     }
 
+    /// Uses `rules` (the app's ruleset) for coloring.
+    pub fn set_rules(&mut self, rules: std::sync::Arc<Vec<crate::rules::Rule>>) {
+        if self.colors.set(rules) {
+            self.rows_key = None;
+        }
+    }
+
+    /// Prepared rows are read and colored again on the next frame.
+    pub fn repaint_cells(&mut self) {
+        self.rows_key = None;
+    }
+
     pub fn toggle_tag(&mut self, row: u32) {
         if self.tags.remove(&row).is_none() {
             self.tags.insert(row, String::new());
@@ -1115,6 +1138,7 @@ impl GridSource for TabSource<'_> {
         {
             s.push_str(" (year?)");
         }
+        s.push_str(&self.tab.dupes.header_mark(c));
         s
     }
 
@@ -1124,10 +1148,17 @@ impl GridSource for TabSource<'_> {
 
     fn header_tip(&self, col: usize) -> Option<String> {
         let c = self.tab.file_col(col)?;
-        match self.tab.kind(c) {
-            Kind::Time(f) => Some(format!("dates: {}", f.describe())),
-            _ => None,
-        }
+        let tips: Vec<String> = [
+            match self.tab.kind(c) {
+                Kind::Time(f) => Some(format!("dates: {}", f.describe())),
+                _ => None,
+            },
+            self.tab.dupes.header_tip(c),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        (!tips.is_empty()).then(|| tips.join("\n"))
     }
 
     fn prepare(&mut self, rows: Range<u64>) {
@@ -1163,6 +1194,8 @@ impl GridSource for TabSource<'_> {
         if r.is_err() {
             return;
         }
+        // Rules and duplicate counts look at the file's text.
+        crate::rules::paint(tab, rows.clone());
         // Display time zone for time columns, and parsed times of columns
         // whose cells are not the instant as written (epoch numbers...).
         if tab.table.column_index().is_some() {
@@ -1206,10 +1239,25 @@ impl GridSource for TabSource<'_> {
     }
 
     fn row_color(&self, row: u64) -> Option<Color32> {
+        // A row rule wins over the tagged color (the star stays).
+        if let Some(c) = crate::rules::row_color(self.tab, row) {
+            return Some(c);
+        }
         let r = self.tab.view.row_at(row)?;
         if self.tab.tags.contains_key(&r) {
             return Some(self.tagged);
         }
         None
+    }
+
+    fn cell_style(&self, row: u64, col: usize) -> crate::grid::CellStyle {
+        match self.tab.file_col(col) {
+            Some(c) => crate::rules::cell_style(self.tab, row, c),
+            None => Default::default(),
+        }
+    }
+
+    fn cell_tip(&self, row: u64, col: usize) -> Option<String> {
+        crate::rules::cell_tip(self.tab, row, self.tab.file_col(col)?)
     }
 }

@@ -14,11 +14,13 @@ mod colorder;
 mod convert;
 mod copyfmt;
 mod datefmt;
+mod dupes;
 mod fonts;
 mod grid;
 #[cfg(target_os = "macos")]
 mod macos;
 mod querybar;
+mod rules;
 mod selection;
 mod session;
 mod settings;
@@ -31,6 +33,8 @@ mod ui_tests;
 mod ui_tests_appearance;
 #[cfg(test)]
 mod ui_tests_columns;
+#[cfg(test)]
+mod ui_tests_rules;
 #[cfg(test)]
 mod ui_tests_selection;
 

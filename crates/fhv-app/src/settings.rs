@@ -34,6 +34,8 @@ pub struct Settings {
     pub mono_only: bool,
     /// Scale of the whole UI (egui zoom factor).
     pub ui_scale: f32,
+    /// Coloring rules, in order (D-065).
+    pub coloring_rules: Vec<crate::rules::Rule>,
     /// Ctrl+C format of the selection and CSV delimiter (D-061).
     pub copy_format: crate::copyfmt::Format,
     pub copy_csv_delim: char,
@@ -88,6 +90,7 @@ impl Default for Settings {
             grid_font_size: FONT_SIZE,
             mono_only: true,
             ui_scale: 1.0,
+            coloring_rules: Vec::new(),
             copy_format: Default::default(),
             copy_csv_delim: ',',
         }

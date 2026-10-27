@@ -40,6 +40,13 @@ pub struct Session {
     /// with explicit cs (absent before 0.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
+    /// Coloring rules when the session was saved (absent before 0.4);
+    /// loading the session makes them the app's rules (D-065).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<Vec<crate::rules::Rule>>,
+    /// Duplicate / unique highlighting by column name (absent before 0.4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub highlights: Vec<(String, crate::dupes::Mode, crate::dupes::Scope)>,
 }
 
 /// A column kind set by the analyst as text: a date format spec
@@ -116,6 +123,13 @@ pub fn capture(tab: &Tab) -> Session {
         date_orders: Vec::new(),
         date_formats: tab.kind_specs(),
         query: (!tab.query.residual_text.is_empty()).then(|| tab.query.residual_text.clone()),
+        rules: Some((*tab.colors.rules).clone()),
+        highlights: tab
+            .dupes
+            .cols
+            .iter()
+            .map(|(&c, x)| (name(c), x.mode, x.scope))
+            .collect(),
     }
 }
 
@@ -200,6 +214,14 @@ pub fn apply(tab: &mut Tab, s: &Session) -> Vec<String> {
         },
     };
     crate::querybar::set_residual(tab, residual);
+    tab.dupes = Default::default();
+    for (n, m, sc) in &s.highlights {
+        match tab.table.columns.iter().position(|c| c == n) {
+            Some(c) => tab.dupes.set(c, *m, *sc),
+            None => warn.push(format!("column {n} not in this file")),
+        }
+    }
+    tab.repaint_cells();
     tab.requery();
     warn
 }
