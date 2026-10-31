@@ -228,7 +228,7 @@ impl App {
     }
 
     /// Opens files picked or dropped together: CSVs each in a tab, all the
-    /// forhunt evidence (EVTX, $MFT, $J, folders) as one timeline.
+    /// forhunt evidence (EVTX, $MFT, $J, prefetch, folders) as one timeline.
     pub fn open_many(&mut self, paths: Vec<PathBuf>) {
         let (evidence, csvs): (Vec<PathBuf>, Vec<PathBuf>) = paths
             .into_iter()
@@ -351,7 +351,7 @@ impl App {
         if let Some(files) = rfd::FileDialog::new()
             .add_filter(
                 "CSV, event logs, NTFS",
-                &["csv", "tsv", "txt", "tab", "psv", "evtx"],
+                &["csv", "tsv", "txt", "tab", "psv", "evtx", "pf"],
             )
             .add_filter("All files", &["*"])
             .pick_files()
@@ -562,7 +562,7 @@ impl App {
                 }
                 if ui
                     .button("Open evidence folder…")
-                    .on_hover_text("every .evtx / $MFT / $J inside, parsed by forhunt into one timeline")
+                    .on_hover_text("every .evtx / $MFT / $J / .pf inside, parsed by forhunt into one timeline")
                     .clicked()
                 {
                     ui.close();
@@ -1118,7 +1118,7 @@ impl App {
         let Some(t) = self.tabs.get_mut(self.active) else {
             if self.conversions.is_empty() {
                 ui.label(
-                    "Open a CSV, event logs (.evtx) or an evidence folder: File > Open, drag and drop, or forhunt-viewer PATH",
+                    "Open a CSV, event logs (.evtx), prefetch (.pf) or an evidence folder: File > Open, drag and drop, or forhunt-viewer PATH",
                 );
             }
             return;
@@ -1400,7 +1400,7 @@ impl App {
                         "NTFS $MFT and $J",
                         "file system timeline, parsed by forhunt",
                     ),
-                    ("Evidence folder", "every .evtx / $MFT / $J inside it"),
+                    ("Evidence folder", "every .evtx / $MFT / $J / .pf inside it"),
                 ] {
                     ui.label(RichText::new(format!("{what}: {how}")).size(14.0).weak());
                 }

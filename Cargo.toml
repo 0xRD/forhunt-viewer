@@ -32,8 +32,8 @@ serde_json = "1"
 tempfile = "3"
 proptest = "1"
 # EVTX / $MFT / $J parsing and the CSV layout of `forhunt parse -F csv` (D-033).
-forhunt-core = { git = "https://github.com/0xRD/forensic-hunter", tag = "v0.3.0", version = "0.3.0" }
-forhunt-output = { git = "https://github.com/0xRD/forensic-hunter", tag = "v0.3.0", version = "0.3.0" }
+forhunt-core = { git = "https://github.com/0xRD/forensic-hunter", tag = "v0.4.0", version = "0.4.0" }
+forhunt-output = { git = "https://github.com/0xRD/forensic-hunter", tag = "v0.4.0", version = "0.4.0" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

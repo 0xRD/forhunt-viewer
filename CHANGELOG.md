@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Prefetch: `.pf` files, or a folder of them, open as a timeline with one
+  row per stored run time. They merge with
+  event logs and NTFS when opened together.
+
 ## 0.5.3 (2026-10-31)
 
 - The *Date formats* tab of the Settings window is gone, with Help > Date

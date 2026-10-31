@@ -1,5 +1,5 @@
-//! Opening forhunt evidence (EVTX, `$MFT`, `$UsnJrnl:$J`, or a folder of
-//! them): forhunt's own libraries write the events to a CSV in the cache,
+//! Opening forhunt evidence (EVTX, `$MFT`, `$UsnJrnl:$J`, prefetch, or a
+//! folder of them): forhunt's own libraries write the events to a CSV in the cache,
 //! byte-identical to `forhunt parse -F csv`, and the CSV opens as a normal
 //! tab (D-033). Nothing is written next to the evidence.
 
@@ -13,7 +13,7 @@ use std::time::Instant;
 use forhunt_core::artifact::ParseOptions;
 
 /// forhunt version linked in (part of the cache key: a new parser rewrites).
-pub const FORHUNT_VERSION: &str = "0.3.0";
+pub const FORHUNT_VERSION: &str = "0.4.0";
 
 /// True if `path` is something forhunt parses rather than a CSV: a
 /// directory, or a file an artifact recognises by content or name.
@@ -121,7 +121,7 @@ fn run(
         .map_err(|e| format!("{e:#}"))?;
     if o.sources.is_empty() {
         let why = if o.warnings.is_empty() {
-            "no event log or NTFS file found".to_string()
+            "no event log, NTFS or prefetch file found".to_string()
         } else {
             o.warnings.join("\n")
         };
@@ -309,6 +309,20 @@ mod tests {
             assert!(t.elapsed().as_secs() < 30, "conversion timed out");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn prefetch_opens_as_a_timeline() {
+        let pf: PathBuf =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/CMD.EXE-0BD30981.pf").into();
+        assert!(is_evidence(&pf));
+        let cache = tempfile::tempdir().unwrap();
+        let done = wait(&Conversion::start(vec![pf], cache.path())).unwrap();
+        // One row per stored run time.
+        assert_eq!(done.events, 3);
+        let csv = std::fs::read_to_string(&done.csv).unwrap();
+        assert!(csv.contains("Program executed"));
+        assert!(csv.contains("WINDOWS\\SYSTEM32\\CMD.EXE"));
     }
 
     #[test]
