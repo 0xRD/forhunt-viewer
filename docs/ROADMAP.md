@@ -17,6 +17,11 @@ Open work, roughly by priority.
 - Merged timeline of several CSV files (evidence files already merge, D-033).
 - JSONL input.
 
+## Input
+- A hive's `.LOG1`/`.LOG2` or another binary file opened alone gives a garbage
+  one-column CSV: refuse it with a message.
+- Prefetch `ExecutableName` stops at 29 characters, as stored: say so in the UI.
+
 ## Platforms and packaging
 - Signed and notarized macOS builds (needs an Apple Developer ID; until then
   users click Open Anyway once).

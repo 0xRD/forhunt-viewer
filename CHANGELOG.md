@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (2026-10-31)
 
 - Prefetch: `.pf` files, or a folder of them, open as a timeline with one
   row per stored run time. They merge with
@@ -10,6 +10,16 @@
   Amcache, UserAssist, BAM, typed commands, USB, networks and local accounts.
   Dirty hives are brought up to date from their logs when these sit beside them.
 - The welcome screen lists prefetch and registry hives.
+- A damaged log keeps its warning when reopened from the cache.
+- Clearing the cache no longer kills a conversion in progress.
+- A CSV named like evidence (`usnjrnl.csv`, or `SYSTEM` without an extension)
+  opens as a CSV.
+- One unreadable value in settings.json drops that setting only. The file as it
+  was is kept as `settings.json.bad`.
+- Replacing a `SYSTEM` hive no longer reuses a cached host name.
+- Markdown copies escape `<`, `*`, `_`, backticks and brackets.
+- Times beyond the time zone database show in UTC, with their offset.
+- A folder with no evidence says so.
 
 ## 0.5.3 (2026-10-31)
 

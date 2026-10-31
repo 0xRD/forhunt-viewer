@@ -192,10 +192,15 @@ fn json_object(out: &mut String, keys: &[String], cells: &[String]) {
 }
 
 fn md_cell(v: &str) -> String {
-    v.replace('\\', "\\\\")
-        .replace('|', "\\|")
-        .replace("\r\n", "<br>")
-        .replace(['\n', '\r'], "<br>")
+    let mut out = String::with_capacity(v.len());
+    for c in v.chars() {
+        // Evidence is full of these: `<user>` would vanish once rendered.
+        if matches!(c, '\\' | '|' | '`' | '*' | '_' | '<' | '>' | '[' | ']') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.replace("\r\n", "<br>").replace(['\n', '\r'], "<br>")
 }
 
 /// The table as text. `headers`: a header line (TSV, CSV), objects keyed
@@ -818,6 +823,12 @@ mod tests {
     }
 
     #[test]
+    fn markdown_keeps_markup_as_text() {
+        assert_eq!(md_cell("<b>*a_b*</b>"), "\\<b\\>\\*a\\_b\\*\\</b\\>");
+        assert_eq!(md_cell("C:\\x"), "C:\\\\x");
+    }
+
+    #[test]
     fn markdown_escapes_pipes_and_newlines() {
         let (names, rows) = tricky();
         let text = render(Format::Markdown, ',', &names, &rows, true);
@@ -827,7 +838,7 @@ mod tests {
         assert_eq!(lines[1], "| --- | --- | --- | --- |");
         assert_eq!(
             lines[3],
-            "| line1<br>line2 | x\\|y | a,b;c | {\"k\": [1, 2]} |"
+            "| line1<br>line2 | x\\|y | a,b;c | {\"k\": \\[1, 2\\]} |"
         );
         assert_eq!(lines[4], "|  |  |  |  |");
     }

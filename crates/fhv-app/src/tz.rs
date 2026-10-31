@@ -63,8 +63,8 @@ impl Display {
             return f.rewrites().then(|| time::format(ticks, 0));
         };
         let secs = ticks.div_euclid(TICKS_PER_SEC);
-        let ts = jiff::Timestamp::from_second(secs).ok()?;
-        let off = tz.to_offset(ts).seconds();
+        // Past the zone database's range: UTC, labelled as such.
+        let off = jiff::Timestamp::from_second(secs).map_or(0, |ts| tz.to_offset(ts).seconds());
         let mut s = time::format(ticks, off);
         let sign = if off < 0 { '-' } else { '+' };
         let a = off.unsigned_abs();

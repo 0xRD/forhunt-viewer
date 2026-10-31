@@ -162,13 +162,42 @@ impl Settings {
     }
 
     pub fn load() -> Settings {
-        let mut s: Settings = std::fs::read(Self::path())
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let path = Self::path();
+        let mut s = match std::fs::read(&path) {
+            Ok(b) => {
+                let (s, intact) = Self::from_json(&b);
+                if !intact {
+                    // The next save rewrites the file: keep what it held.
+                    let _ = std::fs::write(path.with_extension("json.bad"), b);
+                }
+                s
+            }
+            Err(_) => Settings::default(),
+        };
         s.grid_font_size = clamp_size(s.grid_font_size);
         s.ui_scale = clamp_scale(s.ui_scale);
         s
+    }
+
+    /// One unreadable value (a newer version's enum, say) drops that setting
+    /// only. The flag says whether everything was read.
+    fn from_json(bytes: &[u8]) -> (Settings, bool) {
+        if let Ok(s) = serde_json::from_slice(bytes) {
+            return (s, true);
+        }
+        let Ok(serde_json::Value::Object(saved)) = serde_json::from_slice(bytes) else {
+            return (Settings::default(), false);
+        };
+        let mut kept = serde_json::Map::new();
+        for (k, v) in saved {
+            let mut one = serde_json::Map::new();
+            one.insert(k.clone(), v.clone());
+            if serde_json::from_value::<Settings>(one.into()).is_ok() {
+                kept.insert(k, v);
+            }
+        }
+        let s = serde_json::from_value(kept.into()).unwrap_or_default();
+        (s, false)
     }
 
     pub fn theme_name(&self) -> String {
@@ -269,9 +298,20 @@ pub fn evict_cache(dir: &std::path::Path, max_bytes: u64) -> u64 {
     files.sort_by_key(|f| f.2);
     let mut total: u64 = files.iter().map(|f| f.1).sum();
     let mut freed = 0;
-    for (p, len, _) in files {
+    let now = std::time::SystemTime::now();
+    for (p, len, modified) in files {
         if total <= max_bytes {
             break;
+        }
+        // A parse is writing it. One left by a crash ages out.
+        let partial = p
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with(".partial-"));
+        let active = now
+            .duration_since(modified)
+            .is_ok_and(|d| d.as_secs() < 600);
+        if partial && active {
+            continue;
         }
         if std::fs::remove_file(&p).is_ok() {
             total -= len;
@@ -279,4 +319,30 @@ pub fn evict_cache(dir: &std::path::Path, max_bytes: u64) -> u64 {
         }
     }
     freed
+}
+
+#[cfg(test)]
+mod load_tests {
+    use super::*;
+
+    #[test]
+    fn one_bad_value_keeps_the_other_settings() {
+        let (s, intact) = Settings::from_json(br#"{"dark": false, "ui_scale": "huge"}"#);
+        assert!(!intact);
+        assert!(!s.dark);
+        assert!(Settings::from_json(br#"{"dark": false}"#).1);
+        assert!(!Settings::from_json(b"not json").1);
+    }
+
+    #[test]
+    fn clearing_the_cache_spares_a_running_parse() {
+        let d = tempfile::tempdir().unwrap();
+        let job = d.path().join("forhunt/abc");
+        std::fs::create_dir_all(&job).unwrap();
+        std::fs::write(job.join(".partial-1-0.csv"), "x").unwrap();
+        std::fs::write(job.join("done.csv"), "y").unwrap();
+        evict_cache(d.path(), 0);
+        assert!(job.join(".partial-1-0.csv").exists());
+        assert!(!job.join("done.csv").exists());
+    }
 }

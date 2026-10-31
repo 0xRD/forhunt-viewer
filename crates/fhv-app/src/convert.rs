@@ -13,7 +13,7 @@ use std::time::Instant;
 use forhunt_core::artifact::ParseOptions;
 
 /// forhunt version linked in (part of the cache key: a new parser rewrites).
-pub const FORHUNT_VERSION: &str = "0.5.0";
+pub const FORHUNT_VERSION: &str = "0.5.1";
 
 /// True if `path` is something forhunt parses rather than a CSV: a
 /// directory, or a file an artifact recognises by content or name.
@@ -26,9 +26,12 @@ pub fn is_evidence(path: &Path) -> bool {
         Ok(mut f) => f.read(&mut head).unwrap_or(0),
         Err(_) => return false,
     };
+    let head = &head[..n];
+    // A name alone is not enough: a CSV may be called SYSTEM or usnjrnl.
+    // Sparse `$J` extracts have no signature, but they are binary.
     forhunt_core::artifact::registry()
         .iter()
-        .any(|a| a.sniff(&head[..n]) || a.matches_name(path))
+        .any(|a| a.sniff(head) || (a.matches_name(path) && head.contains(&0)))
 }
 
 pub struct Converted {
@@ -120,8 +123,9 @@ fn run(
     let o = forhunt_core::input::open_all(&args, &ParseOptions::default(), &pool)
         .map_err(|e| format!("{e:#}"))?;
     if o.sources.is_empty() {
-        let why = if o.warnings.is_empty() {
-            "no event log, NTFS or prefetch file found".to_string()
+        // Folders holding nothing come back as "no input matched".
+        let why = if o.warnings.iter().all(|w| w.starts_with("no input matched")) {
+            "no event log, NTFS, prefetch or registry file found".to_string()
         } else {
             o.warnings.join("\n")
         };
@@ -145,15 +149,24 @@ fn run(
         });
         h.update(&len.to_le_bytes());
         h.update(&mtime.to_le_bytes());
+        // Its host name comes from a SYSTEM hive that may not be an input.
+        let host = forhunt_core::registry::computer_for(s.path());
+        h.update(host.unwrap_or_default().as_bytes());
+        h.update(&[0]);
     }
     let key = h.finalize().to_hex();
     let out_dir = dir.join(&key.as_str()[..16]);
     let csv = out_dir.join(format!("{}.csv", file_safe(label)));
+    // What only the parse learns, kept for the next time the CSV is reused.
+    let notes = out_dir.join("warnings.txt");
     if csv.is_file() {
+        let mut warnings = o.warnings;
+        let kept = std::fs::read_to_string(&notes).unwrap_or_default();
+        warnings.extend(kept.lines().map(String::from));
         return Ok(Converted {
             csv,
             events: 0,
-            warnings: o.warnings,
+            warnings,
             cached: true,
         });
     }
@@ -197,10 +210,12 @@ fn run(
     }
     let mut warnings = o.warnings;
     if stats.bad_units > 0 || stats.bad_records > 0 {
-        warnings.push(format!(
+        let damage = format!(
             "{} damaged chunks, {} damaged records skipped",
             stats.bad_units, stats.bad_records
-        ));
+        );
+        let _ = std::fs::write(&notes, &damage);
+        warnings.push(damage);
     }
     Ok(Converted {
         csv,
@@ -300,6 +315,16 @@ mod tests {
     /// Synthetic log from forhunt's evtx-gen (forensic-hunter fixtures).
     const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/PowerShell.evtx");
 
+    /// A log with one chunk damaged.
+    fn d_corrupt() -> PathBuf {
+        let mut b = std::fs::read(FIXTURE).unwrap();
+        let chunk = 4096 + 65536 * (b.len().saturating_sub(4096) / 65536 / 2);
+        b[chunk..chunk + 4096].fill(0xAB);
+        let p = std::env::temp_dir().join(format!("fhv-corrupt-{}.evtx", std::process::id()));
+        std::fs::write(&p, b).unwrap();
+        p
+    }
+
     fn wait(c: &Conversion) -> Result<Converted, String> {
         let t = Instant::now();
         loop {
@@ -323,6 +348,40 @@ mod tests {
         let csv = std::fs::read_to_string(&done.csv).unwrap();
         assert!(csv.contains("Program executed"));
         assert!(csv.contains("WINDOWS\\SYSTEM32\\CMD.EXE"));
+    }
+
+    #[test]
+    fn a_csv_named_like_evidence_stays_a_csv() {
+        let d = tempfile::tempdir().unwrap();
+        for name in ["SYSTEM", "SAM", "usnjrnl.csv", "USNJRNL-J.txt"] {
+            let p = d.path().join(name);
+            std::fs::write(&p, "Time,Name\n1,a\n").unwrap();
+            assert!(!is_evidence(&p), "{name}");
+        }
+        let sparse = d.path().join("$J");
+        std::fs::write(&sparse, [0u8; 4096]).unwrap();
+        assert!(is_evidence(&sparse));
+    }
+
+    #[test]
+    fn damage_is_still_reported_on_a_cache_hit() {
+        let log = d_corrupt();
+        let cache = tempfile::tempdir().unwrap();
+        let first = wait(&Conversion::start(vec![log.clone()], cache.path())).unwrap();
+        assert!(first.warnings.iter().any(|w| w.contains("damaged")));
+        let again = wait(&Conversion::start(vec![log], cache.path())).unwrap();
+        assert!(again.cached);
+        assert_eq!(first.warnings, again.warnings);
+    }
+
+    #[test]
+    fn a_folder_without_evidence_says_so() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.txt"), "x").unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let c = Conversion::start(vec![d.path().into()], cache.path());
+        let err = wait(&c).err().unwrap();
+        assert!(err.contains("no event log"), "{err}");
     }
 
     #[test]
