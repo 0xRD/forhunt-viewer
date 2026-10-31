@@ -7,7 +7,7 @@ filters them interactively. It is the graphical companion of
 
 It reads:
 - **Windows event logs (`.evtx`), NTFS `$MFT` / `$UsnJrnl:$J`, prefetch
-  (`.pf`), registry hives, or a whole evidence folder**, parsed by forhunt's own engine (built in, nothing to
+  (`.pf`), registry hives, Outlook mailboxes (`.ost`, `.pst`), or a whole evidence folder**, parsed by forhunt's own engine (built in, nothing to
   install) into one timeline;
 - forhunt CSV (EvtxECmd layout plus `ForhuntId`);
 - Eric Zimmerman tools output (EvtxECmd, MFTECmd, PECmd, ...);
@@ -20,7 +20,8 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
 ## Features
 
 - **Open evidence directly.** Drop `.evtx` files, `$MFT` / `$J`, `.pf`, registry hives
-  (`SYSTEM`, `SOFTWARE`, `SAM`, `NTUSER.DAT`, `Amcache.hve`), or a folder
+  (`SYSTEM`, `SOFTWARE`, `SAM`, `NTUSER.DAT`, `Amcache.hve`), Outlook
+  mailboxes (`.ost`, `.pst`), or a folder
   (File > *Open evidence folder…*): forhunt parses them in the background
   (cancellable) into a CSV identical to `forhunt parse -F csv`, which opens
   as one timeline sorted by `TimeCreated`. Files dropped together become one
@@ -309,7 +310,7 @@ default application unless you choose it.
   default: `xdg-mime default forhunt-viewer.desktop text/csv`.
 
 Command line: `forhunt-viewer [PATH...]` (CSV/TSV files, `.evtx`, `$MFT`,
-`$J`, `.pf`, registry hives or evidence folders).
+`$J`, `.pf`, registry hives, `.ost`, `.pst` or evidence folders).
 
 ## Query language
 

@@ -1,5 +1,5 @@
 //! Opening forhunt evidence (EVTX, `$MFT`, `$UsnJrnl:$J`, prefetch, registry
-//! hives, or a folder of them): forhunt's own libraries write the events to a CSV in the cache,
+//! hives, mailboxes, or a folder of them): forhunt's own libraries write the events to a CSV in the cache,
 //! byte-identical to `forhunt parse -F csv`, and the CSV opens as a normal
 //! tab (D-033). Nothing is written next to the evidence.
 
@@ -13,7 +13,7 @@ use std::time::Instant;
 use forhunt_core::artifact::ParseOptions;
 
 /// forhunt version linked in (part of the cache key: a new parser rewrites).
-pub const FORHUNT_VERSION: &str = "0.5.1";
+pub const FORHUNT_VERSION: &str = "0.6.0";
 
 /// True if `path` is something forhunt parses rather than a CSV: a
 /// directory, or a file an artifact recognises by content or name.
@@ -125,7 +125,7 @@ fn run(
     if o.sources.is_empty() {
         // Folders holding nothing come back as "no input matched".
         let why = if o.warnings.iter().all(|w| w.starts_with("no input matched")) {
-            "no event log, NTFS, prefetch or registry file found".to_string()
+            "no event log, NTFS, prefetch, registry or mail file found".to_string()
         } else {
             o.warnings.join("\n")
         };
@@ -382,6 +382,18 @@ mod tests {
         let c = Conversion::start(vec![d.path().into()], cache.path());
         let err = wait(&c).err().unwrap();
         assert!(err.contains("no event log"), "{err}");
+    }
+
+    #[test]
+    fn mailbox_opens_as_a_timeline() {
+        let pst: PathBuf = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/archive.pst").into();
+        assert!(is_evidence(&pst));
+        let cache = tempfile::tempdir().unwrap();
+        let done = wait(&Conversion::start(vec![pst], cache.path())).unwrap();
+        assert_eq!(done.events, 5);
+        let csv = std::fs::read_to_string(&done.csv).unwrap();
+        assert!(csv.contains("Mail message"));
+        assert!(csv.contains("MemberCard.tiff.exe"));
     }
 
     #[test]

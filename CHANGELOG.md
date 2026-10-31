@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 (2026-10-31)
+
+- Outlook mailboxes: `.ost` and `.pst` files, or a folder holding them, open as a
+  timeline of messages, attachments with their SHA-256, and contacts. They merge
+  with the other evidence when opened together.
+- The welcome screen, the status bar and `--help` list them.
+
 ## 0.6.0 (2026-10-31)
 
 - Prefetch: `.pf` files, or a folder of them, open as a timeline with one
