@@ -14,7 +14,6 @@ mod colorder;
 mod convert;
 mod copyfmt;
 mod datefmt;
-mod docs;
 mod dupes;
 mod fonts;
 mod grid;

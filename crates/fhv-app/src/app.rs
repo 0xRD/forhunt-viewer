@@ -627,7 +627,6 @@ impl App {
                 {
                     ui.close();
                     self.appearance.settings_open = true;
-                    self.appearance.settings_tab = None;
                 }
                 ui.separator();
                 if ui
@@ -777,10 +776,6 @@ impl App {
                 if ui.button("Keyboard shortcuts").clicked() {
                     ui.close();
                     self.help = true;
-                }
-                if ui.button("Date formats").clicked() {
-                    ui.close();
-                    self.show_docs(0);
                 }
             });
         });
@@ -1859,18 +1854,6 @@ impl App {
         if !crate::datefmt::show(d, t, ctx) {
             self.datefmt = None;
         }
-        if self.datefmt.as_ref().is_some_and(|d| d.want_docs) {
-            if let Some(d) = &mut self.datefmt {
-                d.want_docs = false;
-            }
-            self.show_docs(0);
-        }
-    }
-
-    /// Opens the Settings window on a documentation page.
-    pub(crate) fn show_docs(&mut self, page: usize) {
-        self.appearance.settings_open = true;
-        self.appearance.settings_tab = Some(page);
     }
 
     pub(crate) fn open_filter_editor(&mut self, c: usize) {

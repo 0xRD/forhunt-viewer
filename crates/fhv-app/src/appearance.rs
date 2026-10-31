@@ -15,9 +15,6 @@ type FontLoad = Option<Result<egui::FontData, String>>;
 
 pub struct State {
     pub settings_open: bool,
-    /// Tab of the Settings window: None = settings, else a page of
-    /// `docs::PAGES`.
-    pub settings_tab: Option<usize>,
     /// Theme under the pointer in a picker this frame / the last one
     /// (previewed while hovered).
     hovered: Option<String>,
@@ -44,7 +41,6 @@ impl State {
         let (user_themes, theme_errors) = theme::load_dir(&config_dir.join("themes"));
         State {
             settings_open: false,
-            settings_tab: None,
             hovered: None,
             preview: None,
             applied: String::new(),
@@ -207,25 +203,7 @@ impl State {
         egui::Window::new("Settings")
             .open(&mut open)
             .default_width(420.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings_tab, None, "Settings");
-                    for (i, (title, _)) in crate::docs::PAGES.iter().enumerate() {
-                        ui.selectable_value(&mut self.settings_tab, Some(i), *title)
-                            .on_hover_text("documentation");
-                    }
-                });
-                ui.separator();
-                match self.settings_tab.and_then(|i| crate::docs::PAGES.get(i)) {
-                    Some((_, md)) => {
-                        egui::ScrollArea::vertical()
-                            .id_salt("docs")
-                            .max_height(560.0)
-                            .show(ui, |ui| crate::docs::show(ui, md));
-                    }
-                    None => self.settings_body(ui, s),
-                }
-            });
+            .show(ctx, |ui| self.settings_body(ui, s));
         if !open {
             self.settings_open = false;
         }

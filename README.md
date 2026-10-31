@@ -182,8 +182,8 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
     clocks), month names in English and French, Apache CLF, year-less syslog
     (the year assumed from the file date is flagged), Unix s / ms / µs / ns,
     FILETIME, .NET ticks, Chrome/WebKit, and Excel / Cocoa / day counts when
-    the header says so ([docs/DATE-FORMATS.md](docs/DATE-FORMATS.md), also
-  in the app: Help > Date formats).
+    the header says so ([docs/DATE-FORMATS.md](docs/DATE-FORMATS.md); the
+  date dialog has a cheat sheet).
     Right-click a header > *Date format…* to pick a preset, type a custom
     `strftime` format (live preview, unparsable count), set the zone of
     times without an offset or the year of year-less dates; the choice is

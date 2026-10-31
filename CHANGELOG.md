@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3 (2026-10-31)
+
+- The *Date formats* tab of the Settings window is gone, with Help > Date
+  formats and the dialog's *Learn more*: the long page made the window too
+  wide. The date dialog's *Cheat sheet and examples* stays; the full
+  reference is `docs/DATE-FORMATS.md`.
+
 ## 0.5.2 (2026-10-27)
 
 - A Markdown copy always has the column names in its header row, also

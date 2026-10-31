@@ -301,34 +301,21 @@ fn bad_font_file_keeps_the_previous_font() {
     assert_eq!(h.state().settings.grid_font, GridFont::File(good));
 }
 
-/// Help > Date formats and the date dialog's "Learn more" open the
-/// documentation in the Settings window (no browser: eframe has no links
-/// feature here).
+/// The date dialog carries its own help; the Settings window has no
+/// documentation tab.
 #[test]
-fn docs_open_in_the_settings_window() {
+fn date_help_is_the_cheat_sheet() {
     let dir = tempfile::tempdir().unwrap();
     let file = big(dir.path(), 50);
     let mut h = harness(dir.path(), &file, Settings::default());
     wait(&mut h, idle);
     h.get_by_label("Help").click();
     h.run_steps(2);
-    h.get_by_label("Date formats").click();
-    h.run_steps(3);
-    let a = &h.state().appearance;
-    assert!(a.settings_open);
-    assert_eq!(a.settings_tab, Some(0));
-    h.get_by_label_contains("Which date and time formats forhunt-viewer reads");
-    // File > Settings… opens the settings tab again.
-    h.get_by_label("File").click();
-    h.run_steps(2);
-    h.get_by_label("Settings…").click();
-    h.run_steps(2);
-    assert_eq!(h.state().appearance.settings_tab, None);
-    h.state_mut().appearance.settings_open = false;
+    assert!(h.query_by_label("Date formats").is_none());
     h.state_mut().open_date_format(0);
+    h.state_mut().datefmt.as_mut().unwrap().mode = crate::datefmt::Mode::Custom;
     h.run_steps(2);
-    h.get_by_label("Learn more").click();
-    h.run_steps(3);
-    let a = &h.state().appearance;
-    assert!(a.settings_open && a.settings_tab == Some(0));
+    h.get_by_label_contains("Cheat sheet and examples");
+    assert!(h.query_by_label("Learn more").is_none());
+    assert!(!h.state().appearance.settings_open);
 }

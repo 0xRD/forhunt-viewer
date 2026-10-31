@@ -33,8 +33,6 @@ pub struct DateFmtDlg {
     pub year: String,
     /// First non-blank values of the column.
     pub sample: Vec<String>,
-    /// "Learn more" was clicked: the app shows the documentation.
-    pub want_docs: bool,
 }
 
 impl DateFmtDlg {
@@ -88,7 +86,6 @@ impl DateFmtDlg {
                 String::new()
             },
             sample,
-            want_docs: false,
         }
     }
 
@@ -314,13 +311,6 @@ pub fn show(dlg: &mut DateFmtDlg, t: &mut Tab, ctx: &egui::Context) -> bool {
                     .add_enabled(kind.is_ok(), egui::Button::new("Apply format"))
                     .clicked();
                 cancel = ui.button("Cancel").clicked();
-                if ui
-                    .link("Learn more")
-                    .on_hover_text("date formats documentation (Settings window)")
-                    .clicked()
-                {
-                    dlg.want_docs = true;
-                }
             });
             if apply && let Ok(k) = kind {
                 t.set_kind(dlg.col, k);
