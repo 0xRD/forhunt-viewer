@@ -55,7 +55,7 @@ fn main() -> eframe::Result {
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "forhunt-viewer {}: fast timeline / CSV viewer\n\nusage: forhunt-viewer [PATH...]\n\nPATH: a CSV/TSV, or Windows event logs (.evtx), $MFT, $J, prefetch (.pf) or a folder of them\n(parsed by forhunt into one timeline). Files are opened read-only; indexes and\nparsed timelines are cached in the OS cache directory.",
+            "forhunt-viewer {}: fast timeline / CSV viewer\n\nusage: forhunt-viewer [PATH...]\n\nPATH: a CSV/TSV, or Windows event logs (.evtx), $MFT, $J, prefetch (.pf), registry hives or a folder of them\n(parsed by forhunt into one timeline). Files are opened read-only; indexes and\nparsed timelines are cached in the OS cache directory.",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());

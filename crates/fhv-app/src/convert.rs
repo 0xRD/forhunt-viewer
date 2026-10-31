@@ -1,5 +1,5 @@
-//! Opening forhunt evidence (EVTX, `$MFT`, `$UsnJrnl:$J`, prefetch, or a
-//! folder of them): forhunt's own libraries write the events to a CSV in the cache,
+//! Opening forhunt evidence (EVTX, `$MFT`, `$UsnJrnl:$J`, prefetch, registry
+//! hives, or a folder of them): forhunt's own libraries write the events to a CSV in the cache,
 //! byte-identical to `forhunt parse -F csv`, and the CSV opens as a normal
 //! tab (D-033). Nothing is written next to the evidence.
 
@@ -13,7 +13,7 @@ use std::time::Instant;
 use forhunt_core::artifact::ParseOptions;
 
 /// forhunt version linked in (part of the cache key: a new parser rewrites).
-pub const FORHUNT_VERSION: &str = "0.4.0";
+pub const FORHUNT_VERSION: &str = "0.5.0";
 
 /// True if `path` is something forhunt parses rather than a CSV: a
 /// directory, or a file an artifact recognises by content or name.
@@ -323,6 +323,18 @@ mod tests {
         let csv = std::fs::read_to_string(&done.csv).unwrap();
         assert!(csv.contains("Program executed"));
         assert!(csv.contains("WINDOWS\\SYSTEM32\\CMD.EXE"));
+    }
+
+    #[test]
+    fn registry_hive_opens_as_a_timeline() {
+        let hive: PathBuf = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/SAM").into();
+        assert!(is_evidence(&hive));
+        let cache = tempfile::tempdir().unwrap();
+        let done = wait(&Conversion::start(vec![hive], cache.path())).unwrap();
+        assert_eq!(done.events, 1);
+        let csv = std::fs::read_to_string(&done.csv).unwrap();
+        assert!(csv.contains("Registry"));
+        assert!(csv.contains("jdoe"));
     }
 
     #[test]

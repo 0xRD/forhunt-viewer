@@ -228,7 +228,7 @@ impl App {
     }
 
     /// Opens files picked or dropped together: CSVs each in a tab, all the
-    /// forhunt evidence (EVTX, $MFT, $J, prefetch, folders) as one timeline.
+    /// forhunt evidence (EVTX, $MFT, $J, prefetch, hives, folders) as one timeline.
     pub fn open_many(&mut self, paths: Vec<PathBuf>) {
         let (evidence, csvs): (Vec<PathBuf>, Vec<PathBuf>) = paths
             .into_iter()
@@ -351,7 +351,9 @@ impl App {
         if let Some(files) = rfd::FileDialog::new()
             .add_filter(
                 "CSV, event logs, NTFS",
-                &["csv", "tsv", "txt", "tab", "psv", "evtx", "pf"],
+                &[
+                    "csv", "tsv", "txt", "tab", "psv", "evtx", "pf", "hve", "dat",
+                ],
             )
             .add_filter("All files", &["*"])
             .pick_files()
@@ -562,7 +564,7 @@ impl App {
                 }
                 if ui
                     .button("Open evidence folder…")
-                    .on_hover_text("every .evtx / $MFT / $J / .pf inside, parsed by forhunt into one timeline")
+                    .on_hover_text("every .evtx / $MFT / $J / .pf / registry hive inside, parsed by forhunt into one timeline")
                     .clicked()
                 {
                     ui.close();
@@ -1118,7 +1120,7 @@ impl App {
         let Some(t) = self.tabs.get_mut(self.active) else {
             if self.conversions.is_empty() {
                 ui.label(
-                    "Open a CSV, event logs (.evtx), prefetch (.pf) or an evidence folder: File > Open, drag and drop, or forhunt-viewer PATH",
+                    "Open a CSV, event logs (.evtx), prefetch (.pf), registry hives or an evidence folder: File > Open, drag and drop, or forhunt-viewer PATH",
                 );
             }
             return;
@@ -1400,14 +1402,22 @@ impl App {
                         "NTFS $MFT and $J",
                         "file system timeline, parsed by forhunt",
                     ),
-                    ("Evidence folder", "every .evtx / $MFT / $J / .pf inside it"),
+                    ("Prefetch (.pf)", "programs run, one row per run time"),
+                    (
+                        "Registry hives",
+                        "SYSTEM, SOFTWARE, SAM, NTUSER.DAT, Amcache.hve: autoruns, services, execution",
+                    ),
+                    (
+                        "Evidence folder",
+                        "every .evtx / $MFT / $J / .pf / hive inside it",
+                    ),
                 ] {
                     ui.label(RichText::new(format!("{what}: {how}")).size(14.0).weak());
                 }
                 ui.add_space(14.0);
                 ui.label(
                     RichText::new(
-                        "Event logs and NTFS files dropped together are merged into one \
+                        "Evidence files dropped together are merged into one \
                          timeline, sorted by time. CSV files open in their own tabs.",
                     )
                     .size(13.0)

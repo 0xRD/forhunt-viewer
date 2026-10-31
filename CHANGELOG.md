@@ -5,6 +5,11 @@
 - Prefetch: `.pf` files, or a folder of them, open as a timeline with one
   row per stored run time. They merge with
   event logs and NTFS when opened together.
+- Registry hives (`SYSTEM`, `SOFTWARE`, `SAM`, `NTUSER.DAT`, `Amcache.hve` and
+  others), or a folder holding them: autoruns, services, tasks, ShimCache,
+  Amcache, UserAssist, BAM, typed commands, USB, networks and local accounts.
+  Dirty hives are brought up to date from their logs when these sit beside them.
+- The welcome screen lists prefetch and registry hives.
 
 ## 0.5.3 (2026-10-31)
 
