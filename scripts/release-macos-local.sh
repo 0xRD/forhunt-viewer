@@ -14,7 +14,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 gh release view "$TAG" -R "$REPO" >/dev/null
 
 rm -rf dist/forhunt-viewer-*-macos-arm64.dmg*
-MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release --locked -p fhv-app --target aarch64-apple-darwin
+# No home directory (user name) in the binary's panic paths.
+RUSTFLAGS="--remap-path-prefix=$HOME=~" MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release --locked -p fhv-app --target aarch64-apple-darwin
 target/aarch64-apple-darwin/release/forhunt-viewer --version
 scripts/package-macos.sh "$VER"
 DMG="forhunt-viewer-$VER-macos-arm64.dmg"
