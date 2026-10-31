@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1 (2026-10-31)
+
+- forhunt 0.6.1: a crafted mailbox can no longer use time and memory far beyond
+  its size.
+
 ## 0.7.0 (2026-10-31)
 
 - Outlook mailboxes: `.ost` and `.pst` files, or a folder holding them, open as a
