@@ -245,6 +245,13 @@ impl Table {
         let head = probe.read(0..SNIFF_BYTES, &mut buf)?.to_vec();
         let (detected, bom) = dialect::detect_encoding(&head);
         let encoding = opts.encoding.unwrap_or(detected);
+        if let Some(kind) = dialect::binary_kind(&head, encoding) {
+            return Err(Error::Other(format!(
+                "{} is not a delimited text file ({kind}); open it from an evidence \
+                 folder or with its parser instead of as a CSV",
+                path.display()
+            )));
+        }
         let mut sample = Vec::new();
         if encoding.needs_transcoding() {
             dialect::transcode(encoding, &head[bom..], &mut sample);

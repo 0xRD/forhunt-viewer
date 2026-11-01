@@ -94,6 +94,52 @@ pub fn detect_encoding(head: &[u8]) -> (Encoding, usize) {
     (Encoding::Utf8, 0)
 }
 
+/// Recognizes a file that is binary rather than delimited text: a known
+/// magic number (registry hive and its `.LOG1`/`.LOG2` transaction logs,
+/// event log, SQLite, archives, executables, images) or a sample mostly made of
+/// control bytes in a file that is not UTF-16. Returns a short description.
+pub fn binary_kind(head: &[u8], encoding: Encoding) -> Option<&'static str> {
+    const MAGICS: &[(&[u8], &str)] = &[
+        (b"regf", "registry hive or hive log"),
+        (b"HvLE", "registry hive log"),
+        (b"DIRT", "registry hive log"),
+        (b"ElfFile\0", "Windows event log"),
+        (b"ElfChnk\0", "Windows event log chunk"),
+        (b"SQLite format 3\0", "SQLite database"),
+        (b"PK\x03\x04", "zip archive"),
+        (b"\x1f\x8b", "gzip archive"),
+        (b"7z\xBC\xAF\x27\x1C", "7-Zip archive"),
+        (b"%PDF-", "PDF document"),
+        (b"\x89PNG", "PNG image"),
+        (b"MZ", "Windows executable"),
+        (b"\x7fELF", "ELF executable"),
+        (b"!BDN", "Outlook data file"),
+        (b"SCCA", "prefetch file"),
+        (b"MAM\x04", "compressed prefetch file"),
+    ];
+    for (magic, what) in MAGICS {
+        // A CSV may well start with `MZ,` or `DIRT,`: a text-only magic also
+        // needs a NUL close by, which those binary headers all have.
+        let text_magic = magic.iter().all(u8::is_ascii_graphic);
+        if head.starts_with(magic) && (!text_magic || head[..head.len().min(64)].contains(&0)) {
+            return Some(what);
+        }
+    }
+    // A few stray NULs or control bytes are tolerated (CSV exports carry
+    // them); a sample made largely of them is not text.
+    if !matches!(encoding, Encoding::Utf16Le | Encoding::Utf16Be) && head.len() >= 16 {
+        let sample = &head[..head.len().min(8192)];
+        let ctrl = sample
+            .iter()
+            .filter(|&&b| b < 0x20 && !matches!(b, b'\t' | b'\n' | b'\r' | 0x0C))
+            .count();
+        if ctrl * 10 >= sample.len() * 3 {
+            return Some("binary data");
+        }
+    }
+    None
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Dialect {
     pub delim: u8,
