@@ -235,6 +235,9 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
 ### Forensically sound
 
 - Inputs are opened read-only and never modified.
+- Exports and sessions cannot land on an open file or on evidence: writing to
+  the evidence a tab was parsed from, or anywhere inside an opened evidence
+  folder, is refused (also through links and hard links).
 - Index caches, UTF-16 conversions, settings and sessions go to the OS
   cache/config directories or a location you choose, never next to the
   evidence:

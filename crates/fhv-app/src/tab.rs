@@ -152,6 +152,9 @@ pub struct Tab {
     pub path: PathBuf,
     /// For a CSV written by forhunt: (tab name, evidence path) (D-033).
     pub origin: Option<(String, String)>,
+    /// For a CSV written by forhunt: the evidence files and folders it was
+    /// parsed from. Nothing is ever written to them or inside them.
+    pub inputs: Vec<PathBuf>,
     pub table: Arc<Table>,
     pub engine: Arc<Engine>,
     /// Column kinds were set by the analyst since the app last saved them
@@ -291,6 +294,7 @@ impl Tab {
         Ok(Tab {
             path: path.to_path_buf(),
             origin: None,
+            inputs: Vec::new(),
             engine: Arc::new(Engine::new(table.clone())),
             table,
             loader: Some(rx),

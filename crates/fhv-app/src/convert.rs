@@ -13,7 +13,7 @@ use std::time::Instant;
 use forhunt_core::artifact::ParseOptions;
 
 /// forhunt version linked in (part of the cache key: a new parser rewrites).
-pub const FORHUNT_VERSION: &str = "0.6.1";
+pub const FORHUNT_VERSION: &str = "0.7.0";
 
 /// True if `path` is something forhunt parses rather than a CSV: a
 /// directory, or a file an artifact recognises by content or name.
@@ -46,6 +46,8 @@ pub struct Conversion {
     pub label: String,
     /// The evidence, for `forhunt show <id> -p <evidence>`.
     pub evidence: String,
+    /// The files and folders being parsed.
+    pub inputs: Vec<PathBuf>,
     pub done: Arc<AtomicU64>,
     pub total: Arc<AtomicU64>,
     pub cancel: Arc<AtomicBool>,
@@ -64,6 +66,7 @@ impl Conversion {
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = channel();
         let dir = cache.join("forhunt");
+        let kept = inputs.clone();
         let job = {
             let (done, total, cancel) = (done.clone(), total.clone(), cancel.clone());
             let label = label.clone();
@@ -85,6 +88,7 @@ impl Conversion {
         Conversion {
             label,
             evidence,
+            inputs: kept,
             done,
             total,
             cancel,

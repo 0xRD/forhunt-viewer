@@ -598,6 +598,58 @@ fn forhunt_show_uses_the_tabs_own_evidence() {
     );
 }
 
+/// A tab parsed by forhunt shows a CSV from the cache, so the open-input
+/// guard alone let an export or a session land on the evidence itself or
+/// inside the evidence folder.
+#[test]
+fn nothing_is_written_into_the_evidence_of_a_forhunt_tab() {
+    use crate::app::refuse_target;
+    let case = tempfile::tempdir().unwrap();
+    let logs = case.path().join("evidence/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let evtx = logs.join("PowerShell.evtx");
+    std::fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/PowerShell.evtx"),
+        &evtx,
+    )
+    .unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    // One file opened.
+    let mut h = harness(cache.path(), &evtx);
+    wait(&mut h, |a| a.tabs.len() == 1 && idle(a));
+    let tabs = &h.state().tabs;
+    assert_eq!(tabs[0].inputs, std::slice::from_ref(&evtx));
+    assert!(refuse_target(tabs, &evtx).is_some(), "the log itself");
+    assert!(refuse_target(tabs, &logs.join("sub/../PowerShell.evtx")).is_some());
+    assert!(refuse_target(tabs, &logs.join("export.csv")).is_none());
+    #[cfg(unix)]
+    {
+        let hard = case.path().join("hard.evtx");
+        std::fs::hard_link(&evtx, &hard).unwrap();
+        assert!(refuse_target(tabs, &hard).is_some(), "hard link to the log");
+    }
+    // The folder opened: nothing goes anywhere under it.
+    let folder = case.path().join("evidence");
+    let mut h = harness(cache.path(), &folder);
+    wait(&mut h, |a| a.tabs.len() == 1 && idle(a));
+    let tabs = &h.state().tabs;
+    let e = refuse_target(tabs, &folder.join("export.csv")).unwrap();
+    assert!(e.contains("inside the evidence"), "{e}");
+    assert!(refuse_target(tabs, &logs.join("new/deeper/session.json")).is_some());
+    assert!(refuse_target(tabs, &folder.join("../evidence/x.csv")).is_some());
+    #[cfg(unix)]
+    {
+        let link = case.path().join("link");
+        std::os::unix::fs::symlink(&folder, &link).unwrap();
+        assert!(
+            refuse_target(tabs, &link.join("x.csv")).is_some(),
+            "through a link"
+        );
+    }
+    assert!(refuse_target(tabs, &case.path().join("export.csv")).is_none());
+    assert!(refuse_target(tabs, &case.path().join("evidence2/x.csv")).is_none());
+}
+
 /// Opening an event log: forhunt parses it, the tab opens sorted by
 /// TimeCreated (oldest first, ties in file order), knows its evidence, and
 /// the rows are exactly those of the CSV.

@@ -702,6 +702,7 @@ pub fn window(
     open: &mut Option<Editor>,
     s: &mut crate::settings::Settings,
     tab: Option<&Tab>,
+    tabs: &[Tab],
 ) -> bool {
     let Some(ed) = open.as_mut() else {
         return false;
@@ -860,12 +861,16 @@ pub fn window(
                         .add_filter("rules", &["json"])
                         .save_file()
                 {
-                    ed.msg = Some(
-                        match crate::settings::write_atomic(&p, export_json(rules).as_bytes()) {
-                            Ok(()) => format!("exported to {}", p.display()),
-                            Err(e) => format!("{}: {e}", p.display()),
-                        },
-                    );
+                    // Never onto an open input or into evidence.
+                    ed.msg = Some(match crate::app::refuse_target(tabs, &p) {
+                        Some(refused) => refused,
+                        None => {
+                            match crate::settings::write_atomic(&p, export_json(rules).as_bytes()) {
+                                Ok(()) => format!("exported to {}", p.display()),
+                                Err(e) => format!("{}: {e}", p.display()),
+                            }
+                        }
+                    });
                 }
                 if let Some(t) = tab
                     && ui
