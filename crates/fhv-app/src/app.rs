@@ -282,6 +282,7 @@ impl App {
                     if self.open_table(&done.csv) {
                         if let Some(t) = self.tabs.get_mut(self.active) {
                             t.origin = Some((c.label.clone(), c.evidence.clone()));
+                            t.inputs = c.inputs.clone();
                             // forhunt writes in input order (file by file):
                             // show one timeline, oldest first.
                             if t.sort.is_empty()
@@ -538,6 +539,7 @@ impl App {
         match Tab::open_with(&old.path.clone(), &self.cache_dir, Some(d)) {
             Ok(mut t) => {
                 t.origin = old.origin.clone();
+                t.inputs = old.inputs.clone();
                 self.apply_prefs(&mut t);
                 self.tabs[i].cancel_job();
                 self.tabs[i] = t;
@@ -2754,10 +2756,14 @@ fn valid_forhunt_id(id: &str) -> bool {
 }
 
 /// Refuses writing to a file that is open as an input (also through a
-/// symlink, a relative path or a hard link): evidence is never modified.
+/// symlink, a relative path or a hard link), and for a tab parsed by
+/// forhunt, to the evidence it was parsed from or anywhere inside an
+/// evidence folder: evidence is never modified or added to.
 pub fn refuse_target(tabs: &[Tab], target: &Path) -> Option<String> {
     let canon = |p: &Path| std::fs::canonicalize(p).ok();
     let t = canon(target);
+    // The target may not exist yet: resolved as far as it does.
+    let future = resolve_future(target);
     for tab in tabs {
         let same = match (&t, canon(&tab.path)) {
             (Some(a), Some(b)) => *a == b || same_inode(a, &b),
@@ -2769,8 +2775,50 @@ pub fn refuse_target(tabs: &[Tab], target: &Path) -> Option<String> {
                 target.display()
             ));
         }
+        for input in &tab.inputs {
+            let Some(real) = canon(input) else { continue };
+            let inside = if real.is_dir() {
+                future.starts_with(&real)
+            } else {
+                future == real || t.as_ref().is_some_and(|a| same_inode(a, &real))
+            };
+            if inside {
+                return Some(format!(
+                    "refusing to write to {}: it is inside the evidence ({}); choose a place outside it",
+                    target.display(),
+                    input.display()
+                ));
+            }
+        }
     }
     None
+}
+
+/// `p` as an absolute path with links followed as far as the path exists;
+/// what does not exist yet is appended as is.
+fn resolve_future(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(p)
+    };
+    let mut out = PathBuf::new();
+    for c in abs.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            c => {
+                out.push(c);
+                if let Ok(real) = out.canonicalize() {
+                    out = real;
+                }
+            }
+        }
+    }
+    out
 }
 
 #[cfg(unix)]
@@ -3024,6 +3072,7 @@ impl eframe::App for App {
             &mut self.rules_dlg,
             &mut self.settings,
             self.tabs.get(self.active),
+            &self.tabs,
         ) {
             self.rules_changed();
         }

@@ -11,6 +11,10 @@ ignore = [
     # `encoding` (legacy code pages for ANSI strings in EVTX) is unmaintained,
     # no known vulnerability; via forhunt-core -> evtx (same entry as forhunt).
     { id = "RUSTSEC-2021-0153", reason = "transitive via forhunt-core/evtx; unmaintained, no vulnerability" },
+    # Unbounded allocation in evtx's `.wevtcache` reader: behind evtx's
+    # `wevt_templates` feature, which forhunt-core does not enable, so the code
+    # is not compiled in (same entry and reasoning as forhunt, its D-057).
+    { id = "RUSTSEC-2026-0431", reason = "in evtx's wevt_templates feature, which is not compiled in" },
     # zbus_names / zvariant / zvariant_derive were folded back into the zbus
     # crate (announcement: z-galaxy/zbus#2043); "unmaintained" as standalone
     # crates, no vulnerability. Pulled in by accesskit (screen readers on

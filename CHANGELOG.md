@@ -1,9 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-11-14)
 
-A hive's `.LOG1`/`.LOG2` or another binary file opened alone is refused with a message
-instead of showing a garbage one-column CSV.
+Audit: the CSV engine fuzzed with 13,000 damaged files (no fault found), the
+evidence path reviewed.
+
+- Nothing is written into the evidence of a tab parsed by forhunt. An export, a
+  session, a list of tagged ids or a rule file aimed at the evidence file itself (also through a link or
+  a hard link) or anywhere inside an opened evidence folder is refused. Until now
+  only the file shown in the tab was protected, and for evidence that is the CSV in
+  the cache: an export could overwrite the log it came from.
+- forhunt 0.7.0: an event log with one time value outside the years 0 to 9999
+  (the "never" FILETIME, or garbage) lost every event of that 64 KiB chunk; a `$J`
+  ending in a few stray bytes lost its last block. Both are read in full now.
+  Evidence parsed before is parsed again on first open (the cache key holds the
+  forhunt version).
+- Exporting coloring rules went past the guard altogether and could overwrite an
+  open input file.
+- A hive's `.LOG1`/`.LOG2` or another binary file opened alone is refused with a
+  message instead of showing a garbage one-column CSV.
+- Dependencies: `async-executor` 1.14.0 was yanked, now 1.14.1.
 
 ## 0.7.1 (2026-10-31)
 
