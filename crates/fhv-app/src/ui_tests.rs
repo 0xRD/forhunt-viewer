@@ -204,7 +204,10 @@ fn only_matches_default_and_remembered_choice() {
     wait(&mut h, idle);
     assert!(Settings::default().search_only_matches);
     assert!(h.state().tabs[0].search_filter);
+    // As typing does: with "only matches" on, a search edit re-queries
+    // (without it, the filter waited on some other re-query: a race).
     h.state_mut().tabs[0].search = "msg 99".into();
+    h.state_mut().tabs[0].requery();
     wait(&mut h, |a| idle(a) && a.tabs[0].view.len() == 11);
     h.get_by_label("only matches").click();
     h.step();
