@@ -27,18 +27,96 @@ use serde::{Deserialize, Serialize};
 
 use crate::tab::Tab;
 
-/// Where the Yamato Security rule set is downloaded from: the newest rules
-/// (Settings > *Download* / *Update*), over HTTPS.
-pub const RULES_URL: &str =
-    "https://github.com/Yamato-Security/hayabusa-rules/archive/refs/heads/main.tar.gz";
-pub const RULES_HOME: &str = "https://github.com/Yamato-Security/hayabusa-rules";
 pub const LICENSE_URL: &str = "https://github.com/SigmaHQ/Detection-Rule-License";
-/// Folder of the downloaded rule set under the rules root.
-pub const HAYABUSA_DIR: &str = "hayabusa-rules";
 /// What was downloaded, written beside the rules.
 const INFO_FILE: &str = ".forhunt-viewer-rules";
-/// Largest download accepted (the rule set is ~10 MB compressed).
-const MAX_DOWNLOAD: u64 = 256 << 20;
+/// Largest download accepted (LOLDrivers, the largest, is ~100 MB).
+const MAX_DOWNLOAD: u64 = 512 << 20;
+
+/// A public rule set Settings offers to download (D-107).
+pub struct Source {
+    /// Folder under the rules root.
+    pub slug: &'static str,
+    pub name: &'static str,
+    pub home: &'static str,
+    /// GitHub archive of the default branch: the newest rules.
+    pub archive: &'static str,
+    pub licence: &'static str,
+    pub licence_url: &'static str,
+    pub about: &'static str,
+    /// Only these folders of the archive are kept (empty: all).
+    pub keep: &'static [&'static str],
+    pub size: &'static str,
+}
+
+pub const CATALOG: &[Source] = &[
+    Source {
+        slug: "hayabusa-rules",
+        name: "Yamato Security hayabusa-rules",
+        home: "https://github.com/Yamato-Security/hayabusa-rules",
+        archive: "https://github.com/Yamato-Security/hayabusa-rules/archive/refs/heads/main.tar.gz",
+        licence: "DRL 1.1",
+        licence_url: LICENSE_URL,
+        about: "4,600+ Sigma and Hayabusa rules for Windows event logs, SigmaHQ's included, with channels and event ids written in.",
+        keep: &["hayabusa", "sigma", "config"],
+        size: "10 MB",
+    },
+    Source {
+        slug: "sigmahq",
+        name: "SigmaHQ",
+        home: "https://github.com/SigmaHQ/sigma",
+        archive: "https://github.com/SigmaHQ/sigma/archive/refs/heads/master.tar.gz",
+        licence: "DRL 1.1",
+        licence_url: LICENSE_URL,
+        about: "The reference Sigma rules (~2,700 for Windows), scoped by their log source. With hayabusa-rules also used, its converted copies run instead of the originals.",
+        keep: &[
+            "rules",
+            "rules-emerging-threats",
+            "rules-threat-hunting",
+            "rules-placeholder",
+            "rules-compliance",
+            "rules-dfir",
+        ],
+        size: "40 MB",
+    },
+    Source {
+        slug: "mdecrevoisier",
+        name: "mdecrevoisier SIGMA-detection-rules",
+        home: "https://github.com/mdecrevoisier/SIGMA-detection-rules",
+        archive: "https://github.com/mdecrevoisier/SIGMA-detection-rules/archive/refs/heads/main.tar.gz",
+        licence: "CC0 1.0",
+        licence_url: "https://creativecommons.org/publicdomain/zero/1.0/",
+        about: "~300 rules on Active Directory and Windows security logs, many correlations (enumeration, brute force).",
+        keep: &[],
+        size: "1 MB",
+    },
+    Source {
+        slug: "mbabinski",
+        name: "mbabinski Sigma-Rules",
+        home: "https://github.com/mbabinski/Sigma-Rules",
+        archive: "https://github.com/mbabinski/Sigma-Rules/archive/refs/heads/main.tar.gz",
+        licence: "GPL-3.0",
+        licence_url: "https://www.gnu.org/licenses/gpl-3.0.html",
+        about: "~200 rules from threat reports (ransomware groups, Red Canary reports).",
+        keep: &[],
+        size: "1 MB",
+    },
+    Source {
+        slug: "loldrivers",
+        name: "LOLDrivers",
+        home: "https://github.com/magicsword-io/LOLDrivers",
+        archive: "https://github.com/magicsword-io/LOLDrivers/archive/refs/heads/main.tar.gz",
+        licence: "Apache-2.0",
+        licence_url: "https://www.apache.org/licenses/LICENSE-2.0",
+        about: "1,300+ rules for vulnerable and malicious drivers being loaded (Sysmon 6), by name and hash.",
+        keep: &["detections/sigma"],
+        size: "100 MB download",
+    },
+];
+
+pub fn source(slug: &str) -> Option<&'static Source> {
+    CATALOG.iter().find(|s| s.slug == slug)
+}
 
 pub const LEVELS: [&str; 6] = ["", "informational", "low", "medium", "high", "critical"];
 
@@ -56,10 +134,13 @@ pub fn level_color(level: u8) -> &'static str {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SigmaSettings {
-    /// Use the downloaded Yamato Security rules (when downloaded).
-    pub hayabusa: bool,
+    /// Downloaded rule sets in use (catalog slugs), when downloaded.
+    pub sets: Vec<String>,
     /// Folders (or files) of your own rules.
     pub folders: Vec<PathBuf>,
+    /// How a folder's rules use their logsource (`auto` when absent,
+    /// `sigma`, `as-written`; D-067 of forhunt).
+    pub profiles: std::collections::BTreeMap<PathBuf, String>,
     /// Lowest rule level run (1 informational .. 5 critical).
     pub min_level: u8,
     /// Also run Hayabusa's noisy rules.
@@ -72,8 +153,9 @@ pub struct SigmaSettings {
 impl Default for SigmaSettings {
     fn default() -> Self {
         SigmaSettings {
-            hayabusa: true,
+            sets: vec!["hayabusa-rules".into()],
             folders: Vec::new(),
+            profiles: Default::default(),
             min_level: 2,
             noisy: false,
             tint_level: 3,
@@ -111,8 +193,9 @@ pub struct Installed {
     pub files: usize,
 }
 
-pub fn installed(root: &Path) -> Option<Installed> {
-    let dir = root.join(HAYABUSA_DIR);
+/// What is recorded about the downloaded set `slug`.
+pub fn installed(root: &Path, slug: &str) -> Option<Installed> {
+    let dir = root.join(slug);
     let text = std::fs::read_to_string(dir.join(INFO_FILE)).ok()?;
     let get = |k: &str| {
         text.lines()
@@ -132,11 +215,13 @@ pub fn installed(root: &Path) -> Option<Installed> {
 #[derive(Clone, Debug, PartialEq)]
 struct LoadKey {
     paths: Vec<PathBuf>,
+    profiles: Vec<(PathBuf, String)>,
     min_level: u8,
     noisy: bool,
 }
 
 pub struct Download {
+    pub slug: &'static str,
     rx: Receiver<Result<String, String>>,
     pub bytes: Arc<AtomicU64>,
     cancel: Arc<AtomicBool>,
@@ -149,7 +234,7 @@ impl Drop for Download {
     }
 }
 
-/// The compiled rules every tab runs (one load, shared), and the download.
+/// The compiled rules every tab runs (one load, shared), and downloads.
 pub struct Library {
     pub root: PathBuf,
     pub set: Option<Arc<RuleSet>>,
@@ -159,15 +244,15 @@ pub struct Library {
     loaded_for: Option<LoadKey>,
     loading: Option<(LoadKey, Receiver<(RuleSet, LoadReport)>)>,
     pub download: Option<Download>,
-    /// Outcome of the last download, for Settings.
-    pub message: Option<Result<String, String>>,
-    pub installed: Option<Installed>,
+    /// Outcome of the last download (slug, result), for Settings.
+    pub message: Option<(&'static str, Result<String, String>)>,
+    /// Downloaded sets, by slug.
+    pub installed: std::collections::BTreeMap<&'static str, Installed>,
 }
 
 impl Library {
     pub fn new(root: PathBuf) -> Library {
-        let installed = installed(&root);
-        Library {
+        let mut l = Library {
             root,
             set: None,
             report: None,
@@ -176,17 +261,27 @@ impl Library {
             loading: None,
             download: None,
             message: None,
-            installed,
-        }
+            installed: Default::default(),
+        };
+        l.refresh_installed();
+        l
     }
 
-    /// Rule paths the settings select (the downloaded set only if present).
+    fn refresh_installed(&mut self) {
+        self.installed = CATALOG
+            .iter()
+            .filter_map(|s| Some((s.slug, installed(&self.root, s.slug)?)))
+            .collect();
+    }
+
+    /// Rule paths the settings select (downloaded sets only if present).
     pub fn paths(&self, s: &SigmaSettings) -> Vec<PathBuf> {
-        let mut v = Vec::new();
-        let hr = self.root.join(HAYABUSA_DIR);
-        if s.hayabusa && hr.is_dir() {
-            v.push(hr);
-        }
+        let mut v: Vec<PathBuf> = CATALOG
+            .iter()
+            .filter(|c| s.sets.iter().any(|x| x == c.slug))
+            .map(|c| self.root.join(c.slug))
+            .filter(|p| p.is_dir())
+            .collect();
         v.extend(s.folders.iter().cloned());
         v
     }
@@ -209,16 +304,18 @@ impl Library {
         if let Some(d) = &self.download {
             match d.rx.try_recv() {
                 Ok(r) => {
+                    let slug = d.slug;
                     self.download = None;
                     if r.is_ok() {
-                        self.installed = installed(&self.root);
+                        self.refresh_installed();
                         self.loaded_for = None;
                     }
-                    self.message = Some(r);
+                    self.message = Some((slug, r));
                 }
                 Err(TryRecvError::Disconnected) => {
+                    let slug = d.slug;
                     self.download = None;
-                    self.message = Some(Err("the download stopped unexpectedly".into()));
+                    self.message = Some((slug, Err("the download stopped unexpectedly".into())));
                 }
                 Err(TryRecvError::Empty) => {}
             }
@@ -241,6 +338,11 @@ impl Library {
         }
         let key = LoadKey {
             paths: self.paths(s),
+            profiles: s
+                .profiles
+                .iter()
+                .map(|(p, x)| (p.clone(), x.clone()))
+                .collect(),
             min_level: s.min_level.clamp(1, 5),
             noisy: s.noisy,
         };
@@ -266,6 +368,13 @@ impl Library {
                         let opts = LoadOptions {
                             min_level: k.min_level,
                             noisy: k.noisy,
+                            profiles: k
+                                .profiles
+                                .iter()
+                                .filter_map(|(p, x)| {
+                                    Some((p.clone(), forhunt_core::sigma::Profile::parse(x)?))
+                                })
+                                .collect(),
                             ..Default::default()
                         };
                         if let Ok(r) =
@@ -280,8 +389,11 @@ impl Library {
         self.loading.is_some() || self.download.is_some()
     }
 
-    /// Downloads the newest Yamato Security rules in the background.
-    pub fn start_download(&mut self) {
+    /// Downloads the newest rules of a catalog set in the background.
+    pub fn start_download(&mut self, slug: &str) {
+        let Some(src) = source(slug) else {
+            return;
+        };
         if self.download.is_some() {
             return;
         }
@@ -293,13 +405,14 @@ impl Library {
             .name("fhv-sigma-download".into())
             .spawn(move || {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    download(&root, RULES_URL, &b, &c)
+                    download(&root, src, &b, &c)
                 }))
                 .unwrap_or_else(|_| Err("internal error (panic)".into()));
                 let _ = tx.send(r);
             });
         self.message = None;
         self.download = Some(Download {
+            slug: src.slug,
             rx,
             bytes,
             cancel,
@@ -308,9 +421,18 @@ impl Library {
     }
 
     pub fn cancel_download(&mut self) {
-        if self.download.take().is_some() {
-            self.message = Some(Err("download cancelled".into()));
+        if let Some(d) = self.download.take() {
+            self.message = Some((d.slug, Err("download cancelled".into())));
         }
+    }
+
+    /// Deletes a downloaded set (and stops using it).
+    pub fn remove(&mut self, slug: &str) -> Result<(), String> {
+        let src = source(slug).ok_or("unknown set")?;
+        std::fs::remove_dir_all(self.root.join(src.slug)).map_err(|e| e.to_string())?;
+        self.refresh_installed();
+        self.loaded_for = None;
+        Ok(())
     }
 }
 
@@ -348,15 +470,16 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-/// Downloads `url` (a GitHub tar.gz of hayabusa-rules) and installs it as
-/// `<root>/hayabusa-rules`, replacing the previous set only once the new
-/// one is complete and looks like a rule set.
+/// Downloads a catalog set (a GitHub tar.gz) and installs it as
+/// `<root>/<slug>`, replacing the previous copy only once the new one is
+/// complete and holds rules.
 pub fn download(
     root: &Path,
-    url: &str,
+    src: &Source,
     bytes: &Arc<AtomicU64>,
     cancel: &Arc<AtomicBool>,
 ) -> Result<String, String> {
+    let url = src.archive;
     std::fs::create_dir_all(root).map_err(|e| format!("cannot create {}: {e}", root.display()))?;
     let resp = agent()
         .get(url)
@@ -372,12 +495,13 @@ pub fn download(
         n: bytes.clone(),
         cancel: cancel.clone(),
     };
-    install_tar_gz(root, r, url)
+    install_tar_gz(root, r, src)
 }
 
-/// Unpacks a hayabusa-rules tar.gz into `<root>/hayabusa-rules` (staged,
-/// then renamed into place).
-pub fn install_tar_gz(root: &Path, r: impl Read, source: &str) -> Result<String, String> {
+/// Unpacks a rule set's tar.gz into `<root>/<slug>` (staged, then renamed
+/// into place), keeping only the source's rule folders and its licence and
+/// readme files.
+pub fn install_tar_gz(root: &Path, r: impl Read, src: &Source) -> Result<String, String> {
     let stage = root.join(format!(".staging-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&stage);
     std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
@@ -405,6 +529,21 @@ pub fn install_tar_gz(root: &Path, r: impl Read, source: &str) -> Result<String,
             if !(ty.is_file() || ty.is_dir()) {
                 continue;
             }
+            // The source's rule folders (and licence / readme at the top).
+            if !src.keep.is_empty() {
+                let path = e.path().map_err(|e| e.to_string())?.into_owned();
+                let inner: PathBuf = path.components().skip(1).collect();
+                let top_file = inner.components().count() == 1 && ty.is_file();
+                let wanted = inner.as_os_str().is_empty()
+                    || top_file
+                    || src
+                        .keep
+                        .iter()
+                        .any(|k| inner.starts_with(k) || Path::new(k).starts_with(&inner));
+                if !wanted {
+                    continue;
+                }
+            }
             if !e
                 .unpack_in(&stage)
                 .map_err(|e| format!("cannot unpack: {e}"))?
@@ -418,16 +557,11 @@ pub fn install_tar_gz(root: &Path, r: impl Read, source: &str) -> Result<String,
             .map(|e| e.path())
             .filter(|p| p.is_dir())
             .collect();
-        let src = match top.as_slice() {
+        let dir = match top.as_slice() {
             [one] => one.clone(),
             _ => return Err("the archive is not a single rules folder".into()),
         };
-        if !src.join("config").is_dir()
-            || !(src.join("sigma").is_dir() || src.join("hayabusa").is_dir())
-        {
-            return Err("the archive is not a hayabusa-rules tree (no config/ and sigma/)".into());
-        }
-        let files = walkdir_count(&src);
+        let files = walkdir_count(&dir);
         if files == 0 {
             return Err("the archive holds no rule".into());
         }
@@ -435,16 +569,17 @@ pub fn install_tar_gz(root: &Path, r: impl Read, source: &str) -> Result<String,
             .strftime("%Y-%m-%dT%H:%M:%SZ")
             .to_string();
         let info = format!(
-            "commit={commit}\ndownloaded={now}\nfiles={files}\nsource={source}\nlicense=Detection Rule License 1.1 ({LICENSE_URL})\n"
+            "commit={commit}\ndownloaded={now}\nfiles={files}\nsource={}\nlicense={} ({})\n",
+            src.home, src.licence, src.licence_url
         );
-        std::fs::write(src.join(INFO_FILE), info).map_err(|e| e.to_string())?;
-        let dest = root.join(HAYABUSA_DIR);
+        std::fs::write(dir.join(INFO_FILE), info).map_err(|e| e.to_string())?;
+        let dest = root.join(src.slug);
         let old = root.join(format!(".old-{}", std::process::id()));
         if dest.exists() {
             std::fs::rename(&dest, &old)
                 .map_err(|e| format!("cannot replace the previous rules: {e}"))?;
         }
-        if let Err(e) = std::fs::rename(&src, &dest) {
+        if let Err(e) = std::fs::rename(&dir, &dest) {
             // Put the previous set back.
             let _ = std::fs::rename(&old, &dest);
             return Err(format!("cannot install the rules: {e}"));
@@ -743,6 +878,8 @@ pub struct Detections {
     pub generation: u64,
     /// (rule, rows), most severe first, then most rows.
     pub hits: Vec<(u32, RoaringBitmap)>,
+    /// Correlation rule -> number of bursts (detections) it found.
+    pub bursts: HashMap<u32, u32>,
     /// Rows by their most severe level (index 1..=5).
     pub level: [RoaringBitmap; 6],
     pub all: RoaringBitmap,
@@ -989,10 +1126,24 @@ fn run(
     };
     let quote = table.dialect.quote;
     let tables = table.tables();
-    let map = |b: &fhv_engine::table::Block<'_>| -> Vec<(u32, Vec<u32>)> {
+    // Event times for correlations: the time column's parsed ticks (the
+    // same 100 ns unit as forhunt).
+    let ci = table.column_index();
+    let ticks: Option<&[i64]> = ci
+        .as_ref()
+        .and_then(|ci| ci.primary_time.and_then(|c| ci.cols.get(c)))
+        .and_then(|c| c.time.as_ref())
+        .map(|t| t.ticks.as_slice());
+    let correlate = set.has_correlations();
+    type Part = (
+        Vec<(u32, Vec<u32>)>,
+        Vec<(forhunt_core::sigma::corr::Obs, u32)>,
+    );
+    let map = |b: &fhv_engine::table::Block<'_>| -> Part {
         let mut out = Vec::new();
+        let mut obs = Vec::new();
         if cancel.load(Ordering::Relaxed) {
-            return out;
+            return (out, obs);
         }
         let mut m = set.matcher();
         let mut spans = Vec::new();
@@ -1012,36 +1163,62 @@ fn run(
                 let mut tmp = Vec::new();
                 Some(fhv_engine::table::decode_field(raw, s, quote, &mut tmp).into_owned())
             };
-            let ev = row_event(&cols, &cell);
+            let mut ev = row_event(&cols, &cell);
             m.matches(&ev, &mut hits);
             if !hits.is_empty() {
+                if correlate {
+                    if let Some(t) = ticks.and_then(|t| t.get(row as usize)) {
+                        ev.ts = forhunt_core::Ts(*t);
+                    }
+                    let mut o = Vec::new();
+                    set.observe(&ev, &hits, &mut o);
+                    obs.extend(o.into_iter().map(|x| (x, row as u32)));
+                }
                 out.push((row as u32, std::mem::take(&mut hits)));
             }
         }
         done.fetch_add(read, Ordering::Relaxed);
-        out
+        (out, obs)
     };
     let mut per_rule: HashMap<u32, RoaringBitmap> = HashMap::new();
     let mut level: [RoaringBitmap; 6] = Default::default();
     let mut all = RoaringBitmap::new();
     let rules = set.rules();
+    let mut row_top: HashMap<u32, u8> = HashMap::new();
+    let mut obs = Vec::new();
     table
-        .par_block_list(&blocks, map, |_, v| {
+        .par_block_list(&blocks, map, |_, (v, o)| {
             if cancel.load(Ordering::Relaxed) {
                 return Err(fhv_engine::Error::Cancelled);
             }
+            obs.extend(o);
             for (row, rs) in v {
-                let mut top = 0;
-                for r in rs {
-                    top = top.max(rules[r as usize].level);
+                // Rules used only by correlations are not shown.
+                for r in rs.into_iter().filter(|&r| !rules[r as usize].hidden) {
+                    let t = row_top.entry(row).or_default();
+                    *t = (*t).max(rules[r as usize].level);
                     per_rule.entry(r).or_default().insert(row);
                 }
-                level[top.min(5) as usize].insert(row);
-                all.insert(row);
             }
             Ok(())
         })
         .map_err(|e| e.to_string())?;
+    // Correlations: every member row of a burst is a row of the rule.
+    let mut bursts: HashMap<u32, u32> = HashMap::new();
+    for b in set.correlate(obs) {
+        *bursts.entry(b.rule).or_default() += 1;
+        let lvl = rules[b.rule as usize].level;
+        let rows = per_rule.entry(b.rule).or_default();
+        for m in b.members {
+            rows.insert(m);
+            let t = row_top.entry(m).or_default();
+            *t = (*t).max(lvl);
+        }
+    }
+    for (row, top) in row_top {
+        level[top.min(5) as usize].insert(row);
+        all.insert(row);
+    }
     let mut hits: Vec<(u32, RoaringBitmap)> = per_rule.into_iter().collect();
     hits.sort_by(|a, b| {
         let (ra, rb) = (&rules[a.0 as usize], &rules[b.0 as usize]);
@@ -1051,16 +1228,32 @@ fn run(
             .then_with(|| ra.title.cmp(&rb.title))
             .then(a.0.cmp(&b.0))
     });
+    // System values a CSV layout does not keep (forhunt and EvtxECmd have
+    // no Version, Task or Opcode column): rules testing them cannot match.
+    let lacking: Vec<&str> = ["Version", "Task", "Opcode"]
+        .into_iter()
+        .filter(|f| !table.columns.iter().any(|c| c.eq_ignore_ascii_case(f)))
+        .collect();
+    let blind = rules
+        .iter()
+        .filter(|r| !r.hidden && r.fields.iter().any(|f| lacking.contains(&f.as_str())))
+        .count();
     let note = if cols.channel.is_none() || cols.eid.is_none() {
         Some("No Channel / EventId column: rules that name a channel or event id cannot match this file.".into())
     } else if cols.payload.is_none() {
         Some("No Payload column: the columns are taken as the event's fields.".into())
+    } else if blind > 0 {
+        Some(format!(
+            "{blind} rules also test {} of the event, which this file does not hold: they cannot match here (`forhunt sigma` on the logs can).",
+            lacking.join(" / ")
+        ))
     } else {
         None
     };
     Ok(Detections {
         set,
         generation,
+        bursts,
         hits,
         level,
         all,
@@ -1224,6 +1417,12 @@ mod tests {
             tarb.append_data(&mut h, path, data).unwrap();
         };
         add("hayabusa-rules-abc/config/exclude_rules.txt", b"");
+        // Not a rule folder of the source: left out.
+        add(
+            "hayabusa-rules-abc/scripts/tests/x.yml",
+            b"title: not a rule\n",
+        );
+        add("hayabusa-rules-abc/LICENSE.md", b"DRL");
         add(
             "hayabusa-rules-abc/sigma/r.yml",
             b"title: R\nid: r\nlevel: high\ndetection:\n  a:\n    A: x\n  condition: a\n",
@@ -1233,17 +1432,25 @@ mod tests {
         std::io::Write::write_all(&mut gz, &tar_bytes).unwrap();
         let gz = gz.finish().unwrap();
         let root = tempfile::tempdir().unwrap();
-        let msg = install_tar_gz(root.path(), &gz[..], "test").unwrap();
+        let src = source("hayabusa-rules").unwrap();
+        let msg = install_tar_gz(root.path(), &gz[..], src).unwrap();
         assert!(msg.starts_with("1 rule files"), "{msg}");
-        assert_eq!(installed(root.path()).unwrap().files, 1);
+        assert_eq!(installed(root.path(), "hayabusa-rules").unwrap().files, 1);
+        let dir = root.path().join("hayabusa-rules");
+        assert!(!dir.join("scripts").exists() && dir.join("LICENSE.md").is_file());
         // Again: replaced in place.
-        install_tar_gz(root.path(), &gz[..], "test").unwrap();
+        install_tar_gz(root.path(), &gz[..], src).unwrap();
         let (set, _) =
-            forhunt_core::sigma::load(&[root.path().join(HAYABUSA_DIR)], &Default::default());
+            forhunt_core::sigma::load(&[root.path().join("hayabusa-rules")], &Default::default());
         assert_eq!(set.len(), 1);
         // Not a rules archive: refused, the installed set stays.
-        assert!(install_tar_gz(root.path(), &b"not gzip"[..], "test").is_err());
-        assert!(root.path().join(HAYABUSA_DIR).join("sigma/r.yml").is_file());
+        assert!(install_tar_gz(root.path(), &b"not gzip"[..], src).is_err());
+        assert!(
+            root.path()
+                .join("hayabusa-rules")
+                .join("sigma/r.yml")
+                .is_file()
+        );
         assert_eq!(
             std::fs::read_dir(root.path()).unwrap().count(),
             1,

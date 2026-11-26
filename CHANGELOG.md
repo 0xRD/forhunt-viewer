@@ -19,6 +19,11 @@ Sigma detection, built in (forhunt 0.8.0's engine; no Hayabusa needed).
   false positives and references.
 - Works on forhunt and EvtxECmd CSVs (fields from `Payload`) and on CSVs whose
   columns are event fields. Same results as `forhunt sigma` on the logs.
+- Public rule sets in Settings: hayabusa-rules, SigmaHQ, mdecrevoisier,
+  mbabinski, LOLDrivers, each with its licence, downloaded / updated / removed on
+  request. Your own folders get a logsource profile (Auto, Sigma, As written).
+- Generic Sigma rules (SigmaHQ...) run on the logs their logsource names;
+  correlation rules and `| count() by` mark the rows of each burst.
 
 ## 0.8.0 (2026-11-14)
 
