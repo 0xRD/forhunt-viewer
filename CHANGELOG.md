@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0 (unreleased)
+## 0.9.0 (2026-11-26)
 
 Sigma detection, built in (forhunt 0.8.0's engine; no Hayabusa needed).
 

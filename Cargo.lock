@@ -235,7 +235,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1409,7 +1409,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1694,7 +1694,7 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 [[package]]
 name = "forhunt-core"
 version = "0.8.0"
-source = "git+https://github.com/0xRD/forensic-hunter?rev=03bc58ffb5b43c3e309499ebb3d4848707de9a57#03bc58ffb5b43c3e309499ebb3d4848707de9a57"
+source = "git+https://github.com/0xRD/forensic-hunter?tag=v0.8.0#0b4f4ca6831a61e1e8b7a72885dde7bb6edbfa3b"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1719,7 +1719,7 @@ dependencies = [
 [[package]]
 name = "forhunt-output"
 version = "0.8.0"
-source = "git+https://github.com/0xRD/forensic-hunter?rev=03bc58ffb5b43c3e309499ebb3d4848707de9a57#03bc58ffb5b43c3e309499ebb3d4848707de9a57"
+source = "git+https://github.com/0xRD/forensic-hunter?tag=v0.8.0#0b4f4ca6831a61e1e8b7a72885dde7bb6edbfa3b"
 dependencies = [
  "forhunt-core",
  "jiff",
@@ -2875,7 +2875,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3517,7 +3517,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3574,7 +3574,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4044,7 +4044,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4824,7 +4824,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
