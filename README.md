@@ -167,10 +167,20 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   refused with a warning in the group bar.
 - **Sigma detection.** Run 4,000+ Sigma and Hayabusa rules over a timeline,
   with forhunt's engine built in (no Hayabusa, nothing to install):
-  - *Settings > Detection rules*: **Download rules** fetches Yamato Security's
-    [hayabusa-rules](https://github.com/Yamato-Security/hayabusa-rules)
-    (SigmaHQ rules included; Detection Rule License 1.1) on request, *Update*
-    refreshes them; add folders of your own rules; minimum level, noisy rules.
+  - *Settings > Detection rules*: a catalog of public rule sets, each
+    downloaded on request, updated or removed, with its licence:
+    [hayabusa-rules](https://github.com/Yamato-Security/hayabusa-rules) and
+    [SigmaHQ](https://github.com/SigmaHQ/sigma) (Detection Rule License 1.1),
+    [mdecrevoisier](https://github.com/mdecrevoisier/SIGMA-detection-rules)
+    (CC0), [mbabinski](https://github.com/mbabinski/Sigma-Rules) (GPL-3.0),
+    [LOLDrivers](https://github.com/magicsword-io/LOLDrivers) (Apache-2.0).
+    Add folders of your own rules, each with how it uses `logsource`: *Auto*
+    (rules naming a `Channel` run as written, others on the logs their
+    logsource names), *Sigma*, *As written*. Minimum level, noisy rules.
+  - Generic Sigma rules run where their events are: `process_creation` on
+    Sysmon 1 and Security 4688 (with its field names), `service: security` on
+    the Security log... Correlation rules (`event_count`, `value_count`,
+    `temporal`...) and `| count() by` mark the rows of each burst.
   - **Detect** in the toolbar (or *Detection > Run Sigma detection*,
     Ctrl+Shift+D) runs them over the whole file in the background (progress,
     Esc cancels). Explicit by design: nothing runs on its own.
@@ -188,7 +198,9 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
     any CSV whose columns are named like event fields. The rows a rule cannot
     match are not read (`Channel` / `EventId` dictionaries). 1.65 M rows with
     the full rule set: 4.9 s on 4 cores. Results are the same as `forhunt sigma`
-    on the logs themselves.
+    on the logs themselves (all eight public sets: 19,142 identical
+    detections), except rules testing an event's `Version`, `Task` or
+    `Opcode`, which no CSV layout keeps (the panel says how many).
 
   ![Sigma detections: panel by level, gutter marks, rules of the selected row](docs/screenshots/sigma.png)
 - **Tags and notes** on rows; "tagged only" filter.

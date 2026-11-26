@@ -297,7 +297,20 @@ pub fn panel(ui: &mut Ui, t: &mut Tab, lib: &Library) -> (Option<Action>, bool) 
                         ui.add(
                             egui::Button::selectable(
                                 on,
-                                format!("{} ({})", rule.title, crate::app::fmt_n(rows.len())),
+                                match res.bursts.get(r) {
+                                    // A correlation: its bursts, and the rows in them.
+                                    Some(b) => format!(
+                                        "{} ({} × {} rows)",
+                                        rule.title,
+                                        crate::app::fmt_n(*b as u64),
+                                        crate::app::fmt_n(rows.len())
+                                    ),
+                                    None => format!(
+                                        "{} ({})",
+                                        rule.title,
+                                        crate::app::fmt_n(rows.len())
+                                    ),
+                                },
                             )
                             .truncate(),
                         )
@@ -346,6 +359,9 @@ pub fn rule_card(ui: &mut Ui, rule: &forhunt_core::sigma::Rule, full: bool) {
     });
     if !rule.author.is_empty() {
         ui.label(RichText::new(format!("by {}", rule.author)).small());
+    }
+    if let Some(c) = &rule.corr {
+        ui.label(RichText::new(correlation_text(c)).small().italics());
     }
     if !rule.description.is_empty() {
         ui.label(&rule.description);
@@ -436,81 +452,108 @@ pub fn settings(ui: &mut Ui, s: &mut SigmaSettings, lib: &mut Library) -> bool {
         .small(),
     );
     ui.add_space(4.0);
-    ui.strong("Yamato Security rules (Sigma + Hayabusa)");
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.label(RichText::new("4,000+ curated rules from ").small());
-        ui.hyperlink_to(
-            RichText::new("hayabusa-rules").small(),
-            crate::sigma::RULES_HOME,
-        );
-        ui.label(RichText::new(", including SigmaHQ's, under the ").small());
-        ui.hyperlink_to(
-            RichText::new("Detection Rule License 1.1").small(),
-            crate::sigma::LICENSE_URL,
-        );
-        ui.label(RichText::new(": free to use; each detection names the rule's author.").small());
-    });
-    match &lib.installed {
-        Some(i) => {
-            ui.label(format!(
-                "Downloaded {}: {} rule files{}",
-                i.downloaded.get(..10).unwrap_or(&i.downloaded),
-                crate::app::fmt_n(i.files as u64),
-                if i.commit.is_empty() {
-                    String::new()
-                } else {
-                    format!(", commit {}", &i.commit[..i.commit.len().min(12)])
-                }
-            ));
-        }
-        None => {
-            ui.label(RichText::new("Not downloaded.").weak());
-        }
-    }
-    ui.horizontal(|ui| {
-        if let Some(d) = &lib.download {
-            crate::appearance::spinner(ui);
-            ui.label(format!(
-                "downloading… {:.1} MB ({:.0} s)",
-                d.bytes.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6,
-                d.started.elapsed().as_secs_f64()
-            ));
-            if ui.button("Cancel").clicked() {
-                lib.cancel_download();
-            }
-        } else {
-            let label = if lib.installed.is_some() {
-                "Update to the newest rules"
-            } else {
-                "Download rules"
-            };
-            if ui
-                .button(label)
-                .on_hover_text(format!("{} (about 10 MB, HTTPS)", crate::sigma::RULES_URL))
-                .clicked()
-            {
-                lib.start_download();
-            }
-        }
-    });
-    match &lib.message {
-        Some(Ok(m)) => {
-            ui.label(RichText::new(format!("Installed: {m}.")).small());
-        }
-        Some(Err(e)) => {
-            ui.colored_label(ui.visuals().error_fg_color, e);
-        }
-        None => {}
-    }
-    if ui
-        .add_enabled(
-            lib.installed.is_some(),
-            egui::Checkbox::new(&mut s.hayabusa, "Use these rules"),
+    ui.strong("Public rule sets");
+    ui.label(
+        RichText::new(
+            "Downloaded from GitHub on request (newest version), kept on this computer, never \
+             shared. Each set has its own licence; every detection names the rule's author.",
         )
-        .changed()
-    {
-        changed = true;
+        .small(),
+    );
+    for src in crate::sigma::CATALOG {
+        ui.add_space(2.0);
+        let inst = lib.installed.get(src.slug).cloned();
+        ui.horizontal_wrapped(|ui| {
+            let mut on = s.sets.iter().any(|x| x == src.slug);
+            let r = ui
+                .add_enabled(inst.is_some(), egui::Checkbox::new(&mut on, ""))
+                .on_hover_text("use these rules")
+                .on_disabled_hover_text("download them first");
+            if r.changed() {
+                s.sets.retain(|x| x != src.slug);
+                if on {
+                    s.sets.push(src.slug.to_string());
+                }
+                changed = true;
+            }
+            ui.hyperlink_to(RichText::new(src.name).strong(), src.home);
+            ui.hyperlink_to(RichText::new(src.licence).small(), src.licence_url);
+        });
+        ui.indent(src.slug, |ui| {
+            ui.label(RichText::new(src.about).small());
+            ui.horizontal_wrapped(|ui| {
+                match &inst {
+                    Some(i) => {
+                        ui.label(
+                            RichText::new(format!(
+                                "Downloaded {}: {} rule files{}",
+                                i.downloaded.get(..10).unwrap_or(&i.downloaded),
+                                crate::app::fmt_n(i.files as u64),
+                                if i.commit.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(", commit {}", &i.commit[..i.commit.len().min(10)])
+                                }
+                            ))
+                            .small(),
+                        );
+                    }
+                    None => {
+                        ui.label(RichText::new("Not downloaded.").small().weak());
+                    }
+                }
+                match &lib.download {
+                    Some(d) if d.slug == src.slug => {
+                        crate::appearance::spinner(ui);
+                        ui.label(format!(
+                            "downloading… {:.1} MB ({:.0} s)",
+                            d.bytes.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6,
+                            d.started.elapsed().as_secs_f64()
+                        ));
+                        if ui.small_button("Cancel").clicked() {
+                            lib.cancel_download();
+                        }
+                    }
+                    other => {
+                        let label = if inst.is_some() { "Update" } else { "Download" };
+                        if ui
+                            .add_enabled(other.is_none(), egui::Button::new(label).small())
+                            .on_hover_text(format!("{} ({}, HTTPS)", src.archive, src.size))
+                            .clicked()
+                        {
+                            lib.start_download(src.slug);
+                            // A first download is meant to be used.
+                            if inst.is_none() && !s.sets.iter().any(|x| x == src.slug) {
+                                s.sets.push(src.slug.to_string());
+                                changed = true;
+                            }
+                        }
+                        if inst.is_some()
+                            && ui
+                                .add(egui::Button::new("Remove").small())
+                                .on_hover_text("delete the downloaded rules")
+                                .clicked()
+                        {
+                            let _ = lib.remove(src.slug);
+                            s.sets.retain(|x| x != src.slug);
+                            changed = true;
+                        }
+                    }
+                }
+            });
+            if let Some((slug, m)) = &lib.message
+                && *slug == src.slug
+            {
+                match m {
+                    Ok(m) => {
+                        ui.label(RichText::new(format!("Installed: {m}.")).small());
+                    }
+                    Err(e) => {
+                        ui.colored_label(ui.visuals().error_fg_color, e);
+                    }
+                }
+            }
+        });
     }
     ui.add_space(6.0);
     ui.strong("Your own rules");
@@ -531,11 +574,34 @@ pub fn settings(ui: &mut Ui, s: &mut SigmaSettings, lib: &mut Library) -> bool {
             {
                 remove = Some(i);
             }
+            // How this folder's rules use their logsource.
+            let cur = s.profiles.get(f).cloned().unwrap_or_else(|| "auto".into());
+            let mut pick = cur.clone();
+            egui::ComboBox::from_id_salt(("sigma_profile", i))
+                .width(110.0)
+                .selected_text(profile_label(&cur))
+                .show_ui(ui, |ui| {
+                    for p in ["auto", "sigma", "as-written"] {
+                        ui.selectable_value(&mut pick, p.to_string(), profile_label(p))
+                            .on_hover_text(profile_tip(p));
+                    }
+                })
+                .response
+                .on_hover_text(profile_tip(&cur));
+            if pick != cur {
+                if pick == "auto" {
+                    s.profiles.remove(f);
+                } else {
+                    s.profiles.insert(f.clone(), pick);
+                }
+                changed = true;
+            }
             ui.label(f.display().to_string());
         });
     }
     if let Some(i) = remove {
-        s.folders.remove(i);
+        let f = s.folders.remove(i);
+        s.profiles.remove(&f);
         changed = true;
     }
     if ui.button("Add rules folder…").clicked()
@@ -637,4 +703,62 @@ pub fn settings(ui: &mut Ui, s: &mut SigmaSettings, lib: &mut Library) -> bool {
         }
     }
     changed
+}
+
+/// "value_count of TargetUserName >= 20 within 30 min, per Computer".
+fn correlation_text(c: &forhunt_core::sigma::corr::Corr) -> String {
+    use forhunt_core::sigma::corr::{CmpOp, CorrKind};
+    let op = match c.op {
+        CmpOp::Gt => ">",
+        CmpOp::Ge => "≥",
+        CmpOp::Lt => "<",
+        CmpOp::Le => "≤",
+        CmpOp::Eq => "=",
+        CmpOp::Ne => "≠",
+    };
+    let what = match (c.kind, &c.field) {
+        (CorrKind::EventCount, _) => format!("events {op} {}", c.n),
+        (CorrKind::ValueCount, Some(f)) => format!("distinct {f} {op} {}", c.n),
+        (CorrKind::ValueSum, Some(f)) => format!("sum of {f} {op} {}", c.n),
+        (CorrKind::ValueAvg, Some(f)) => format!("average {f} {op} {}", c.n),
+        (CorrKind::Temporal, _) => format!("all of {}", c.refs.join(", ")),
+        (CorrKind::TemporalOrdered, _) => format!("in order: {}", c.refs.join(" → ")),
+        (k, _) => k.name().to_string(),
+    };
+    let mins = c.timespan as f64 / 600_000_000.0;
+    let span = if c.timespan >= i64::MAX / 8 {
+        "over the whole file".to_string()
+    } else if mins >= 60.0 {
+        format!("within {:.0} h", mins / 60.0)
+    } else {
+        format!("within {mins:.0} min")
+    };
+    let by = if c.group_by.is_empty() {
+        String::new()
+    } else {
+        format!(", per {}", c.group_by.join(", "))
+    };
+    format!("Correlation: {what} {span}{by}")
+}
+
+fn profile_label(p: &str) -> &'static str {
+    match p {
+        "sigma" => "Sigma",
+        "as-written" => "As written",
+        _ => "Auto",
+    }
+}
+
+fn profile_tip(p: &str) -> &'static str {
+    match p {
+        "sigma" => {
+            "Every rule is run on the logs its logsource names (process_creation: Sysmon 1 and Security 4688...), even rules that name a Channel."
+        }
+        "as-written" => {
+            "The detection alone decides: logsource is ignored (rules written for one log, with Channel and EventID)."
+        }
+        _ => {
+            "Rules that name a Channel run as written (Hayabusa, forhunt rules); the others run on the logs their logsource names (SigmaHQ and most public rules)."
+        }
+    }
 }

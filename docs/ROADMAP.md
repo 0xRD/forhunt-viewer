@@ -3,7 +3,7 @@
 Open work, roughly by priority.
 
 ## Features
-- Sigma: correlation rules (forhunt roadmap); a raw-text literal gate before
+- Sigma: a `Version` column in forhunt's CSV (rules testing it, D-108); a raw-text literal gate before
   the payload is parsed (rows of plans with gated rules only); keep detection
   results in sessions; a "Detections" column for sorting and export.
 - Column statistics and a time histogram.

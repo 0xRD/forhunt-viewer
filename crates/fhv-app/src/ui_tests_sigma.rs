@@ -250,7 +250,49 @@ fn detect_needs_rules() {
     h.step();
     assert!(h.state().appearance.settings_open);
     h.step();
-    assert!(h.query_by_label("Download rules").is_some());
+    // Every catalog set offers a download.
+    assert_eq!(
+        h.query_all_by_label("Download").count(),
+        crate::sigma::CATALOG.len()
+    );
+}
+
+/// A SigmaHQ-style rule (logsource, no Channel) on a forhunt CSV: scoped to
+/// its log under Auto, everywhere under As written; a correlation over it.
+#[test]
+fn logsource_profiles_and_correlations() {
+    let dir = tempfile::tempdir().unwrap();
+    let rules = dir.path().join("generic");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(
+        rules.join("r.yml"),
+        "title: Network Logon Generic\nname: netlogon\nid: g1\nlevel: low\nauthor: A\nlogsource:\n  product: windows\n  service: security\ndetection:\n  sel:\n    LogonType: 3\n  condition: sel\n---\ntitle: Many Network Logons\nid: g2\nlevel: high\nauthor: A\ncorrelation:\n  type: event_count\n  rules: [netlogon]\n  group-by: [Computer]\n  timespan: 1h\n  condition:\n    gte: 10\n",
+    )
+    .unwrap();
+    let file = forhunt_csv(dir.path());
+    let mut s = settings_with(&rules);
+    s.sigma.sets.clear();
+    let mut h = harness_with(dir.path(), &file, s);
+    wait(&mut h, "ready", |a| {
+        a.tabs[0].ready() && a.tabs[0].job.is_none() && a.sigma.ready().is_some()
+    });
+    h.state_mut().run_sigma();
+    wait(&mut h, "detection", |a| {
+        a.tabs[0].sigma.result.is_some() && !a.tabs[0].sigma.running()
+    });
+    let res = h.state().tabs[0].sigma.result.clone().unwrap();
+    // The base rule is hidden (used by the correlation only); the
+    // correlation holds the 50 network logons (all within the hour).
+    let rule = |id: &str| res.set.rules().iter().position(|r| r.id == id).unwrap() as u32;
+    assert!(!res.hits.iter().any(|(r, _)| *r == rule("g1")));
+    let rows = res
+        .hits
+        .iter()
+        .find(|(r, _)| *r == rule("g2"))
+        .map(|(_, b)| b.len());
+    assert_eq!(rows, Some(50));
+    assert_eq!(res.bursts.get(&rule("g2")), Some(&1));
+    assert_eq!(res.row_level(res.all.min().unwrap()), 4);
 }
 
 /// Opt-in: the viewer and `forhunt sigma` give the same detections on the
@@ -305,9 +347,35 @@ fn same_detections_as_forhunt_cli() {
         .iter()
         .position(|c| c == "ForhuntId")
         .unwrap();
+    // Rules testing System values the CSV does not hold (Version...) are
+    // left out: the panel says they cannot match a CSV.
+    let blind: std::collections::BTreeSet<String> = res
+        .set
+        .rules()
+        .iter()
+        .filter(|r| {
+            r.fields
+                .iter()
+                .any(|f| matches!(f.as_str(), "Version" | "Task" | "Opcode"))
+        })
+        .map(|r| r.path.display().to_string() + "|" + &r.title)
+        .collect();
+    eprintln!(
+        "left out: {} rules testing Version / Task / Opcode",
+        blind.len()
+    );
     let mut mine = std::collections::BTreeSet::new();
     for (r, rows) in &res.hits {
-        let rid = &res.set.rules()[*r as usize].id;
+        // Correlations are compared as bursts, not (event, rule) pairs.
+        if res.set.rules()[*r as usize].corr.is_some() {
+            continue;
+        }
+        // Rules are named by file and title: some public rules have no id.
+        let rule = &res.set.rules()[*r as usize];
+        let rid = format!("{}|{}", rule.path.display(), rule.title);
+        if blind.contains(&rid) {
+            continue;
+        }
         for row in rows {
             let f = t.table.row_fields(row as u64).unwrap();
             mine.insert((f[idc].clone(), rid.clone()));
@@ -316,8 +384,16 @@ fn same_detections_as_forhunt_cli() {
     let mut theirs = std::collections::BTreeSet::new();
     for l in std::fs::read_to_string(&cli).unwrap().lines() {
         let v: serde_json::Value = serde_json::from_str(l).unwrap();
-        if let (Some(rid), Some(id)) = (v["rid"].as_str(), v["event"]["id"].as_str()) {
-            theirs.insert((id.to_string(), rid.to_string()));
+        let key = format!(
+            "{}|{}",
+            v["rule_path"].as_str().unwrap_or(""),
+            v["rule"].as_str().unwrap_or("")
+        );
+        if blind.contains(&key) {
+            continue;
+        }
+        if let Some(id) = v["event"]["id"].as_str() {
+            theirs.insert((id.to_string(), key));
         }
     }
     let only_mine: Vec<_> = mine.difference(&theirs).take(10).collect();
