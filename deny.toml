@@ -42,7 +42,12 @@ allow = [
     "BSL-1.0",
 ]
 confidence-threshold = 0.9
-exceptions = []
+# Mozilla's CA list as data (permissive), pulled in by rustls-platform-verifier
+# for platforms without a system verifier; not built for the shipped targets
+# (Linux, Windows, macOS). Listed in THIRD-PARTY.md.
+exceptions = [
+    { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+]
 
 [[licenses.clarify]]
 crate = "csv-gen"
