@@ -48,6 +48,8 @@ pub struct Settings {
     /// A new group level starts collapsed, its groups in this order (#18).
     pub group_collapsed: bool,
     pub group_sort: fhv_engine::group::GroupSort,
+    /// Sigma detection rules (D-101).
+    pub sigma: crate::sigma::SigmaSettings,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -107,6 +109,7 @@ impl Default for Settings {
             hide_grouped_cols: false,
             group_collapsed: true,
             group_sort: fhv_engine::group::GroupSort::CountDesc,
+            sigma: Default::default(),
         }
     }
 }

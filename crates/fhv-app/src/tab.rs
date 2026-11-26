@@ -221,6 +221,8 @@ pub struct Tab {
     pub colors: crate::rules::TabRules,
     /// Duplicate / unique highlighting per column (D-066).
     pub dupes: crate::dupes::Dupes,
+    /// Sigma detections: results, run, filter (D-101).
+    pub sigma: crate::sigma::TabSigma,
     /// Grouping: levels, tree and grid lines (D-075).
     pub groups: crate::groups::GroupState,
     /// Grouped grid: index in `rows` of each prepared line (None for a
@@ -338,6 +340,7 @@ impl Tab {
             query: Default::default(),
             colors: Default::default(),
             dupes: Default::default(),
+            sigma: Default::default(),
             groups: Default::default(),
             slots: Vec::new(),
             slots_first: 0,
@@ -502,6 +505,13 @@ impl Tab {
         }
         if self.tagged_only {
             all.push(Expr::Rows(Arc::new(self.tag_set())));
+        }
+        if let Some(rows) = self.sigma.filter_rows() {
+            all.push(if self.sigma.focus_not {
+                Expr::Not(Box::new(Expr::Rows(rows)))
+            } else {
+                Expr::Rows(rows)
+            });
         }
         if self.bad_only {
             // Not cached yet (e.g. "bad rows only" restored by a session
@@ -1317,11 +1327,17 @@ impl Tab {
     }
 
     /// Adapter for the grid.
-    pub fn source<'a>(&'a mut self, tz: &'a tz::Display, tagged: Color32) -> TabSource<'a> {
+    pub fn source<'a>(
+        &'a mut self,
+        tz: &'a tz::Display,
+        tagged: Color32,
+        sigma_tint: u8,
+    ) -> TabSource<'a> {
         TabSource {
             tab: self,
             tz,
             tagged,
+            sigma_tint,
         }
     }
 }
@@ -1330,6 +1346,8 @@ pub struct TabSource<'a> {
     pub tab: &'a mut Tab,
     tz: &'a tz::Display,
     tagged: Color32,
+    /// Rows at or above this Sigma level get its fill (0: none).
+    sigma_tint: u8,
 }
 
 impl GridSource for TabSource<'_> {
@@ -1456,6 +1474,7 @@ impl GridSource for TabSource<'_> {
         let rows = first..first + ids.len() as u64;
         // Rules and duplicate counts look at the file's text.
         crate::rules::paint(tab, rows.clone());
+        crate::sigma::paint(tab, first, &ids);
         // Display time zone for time columns, and parsed times of columns
         // whose cells are not the instant as written (epoch numbers...).
         if tab.table.column_index().is_some() {
@@ -1508,18 +1527,63 @@ impl GridSource for TabSource<'_> {
         if self.tab.tags.contains_key(&r) {
             return Some(self.tagged);
         }
+        // Detections below rules and tags; the gutter marker stays.
+        let lvl = self.tab.sigma.paint.level(k);
+        if self.sigma_tint > 0 && lvl >= self.sigma_tint {
+            let th = self.tab.colors.theme.as_ref()?;
+            return Some(crate::rules::palette_bg(th, crate::sigma::level_color(lvl)));
+        }
         None
+    }
+
+    fn row_marker(&self, row: u64) -> Option<Color32> {
+        let lvl = self.tab.sigma.paint.level(self.slot(row)?);
+        let th = self.tab.colors.theme.as_ref()?;
+        (lvl > 0).then(|| crate::rules::palette_fg(th, crate::sigma::level_color(lvl)))
+    }
+
+    fn row_marker_tip(&self, row: u64) -> Option<String> {
+        self.tab
+            .sigma
+            .paint
+            .titles(self.slot(row)?)
+            .map(str::to_string)
     }
 
     fn cell_style(&self, row: u64, col: usize) -> crate::grid::CellStyle {
         match (self.tab.file_col(col), self.slot(row)) {
-            (Some(c), Some(k)) => crate::rules::cell_style(self.tab, k, c),
+            (Some(c), Some(k)) => {
+                let mut st = crate::rules::cell_style(self.tab, k, c);
+                // A field a matching Sigma rule tests: level marker, bold.
+                if self.tab.sigma.paint.tested(k, c)
+                    && let Some(th) = self.tab.colors.theme.as_ref()
+                {
+                    let lvl = self.tab.sigma.paint.level(k);
+                    st.marker.get_or_insert(crate::rules::palette_fg(
+                        th,
+                        crate::sigma::level_color(lvl),
+                    ));
+                    st.bold = true;
+                }
+                st
+            }
             _ => Default::default(),
         }
     }
 
     fn cell_tip(&self, row: u64, col: usize) -> Option<String> {
-        crate::rules::cell_tip(self.tab, self.slot(row)?, self.tab.file_col(col)?)
+        let (k, c) = (self.slot(row)?, self.tab.file_col(col)?);
+        let rule = crate::rules::cell_tip(self.tab, k, c);
+        let sigma = self
+            .tab
+            .sigma
+            .paint
+            .titles(k)
+            .filter(|_| self.tab.sigma.paint.tested(k, c));
+        match (rule, sigma) {
+            (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+            (a, b) => a.or(b.map(str::to_string)),
+        }
     }
 
     fn group_row(&self, row: u64) -> Option<crate::grid::GroupRow> {

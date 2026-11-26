@@ -3,6 +3,9 @@
 Open work, roughly by priority.
 
 ## Features
+- Sigma: correlation rules (forhunt roadmap); a raw-text literal gate before
+  the payload is parsed (rows of plans with gated rules only); keep detection
+  results in sessions; a "Detections" column for sorting and export.
 - Column statistics and a time histogram.
 - Per-tool column layouts.
 - Leftover from the 0.5.0 issues: screenshots of the header contrast

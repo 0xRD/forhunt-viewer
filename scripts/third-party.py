@@ -35,6 +35,13 @@ out = ["# Third-party software", "",
        "## Fonts", "",
        "- Inter 4.001, SIL Open Font License 1.1 (crates/fhv-app/assets/fonts/OFL-Inter.txt)",
        "- JetBrains Mono 2.211, SIL Open Font License 1.1 (crates/fhv-app/assets/fonts/OFL-JetBrainsMono.txt)",
+       "",
+       "## Detection rules (not bundled)", "",
+       "Settings > Detection rules downloads, on request, Yamato Security's hayabusa-rules",
+       "(https://github.com/Yamato-Security/hayabusa-rules, SigmaHQ rules included) under the",
+       "Detection Rule License 1.1 (https://github.com/SigmaHQ/Detection-Rule-License). They are",
+       "not part of forhunt-viewer; every detection shows the rule's author, as that licence asks.",
+       "The rule engine is forhunt's own (MIT OR Apache-2.0).",
        ""]
 # The hand-written "## Color palettes" section (theme credits) is kept as is.
 old = (ROOT / "THIRD-PARTY.md").read_text() if (ROOT / "THIRD-PARTY.md").exists() else ""
