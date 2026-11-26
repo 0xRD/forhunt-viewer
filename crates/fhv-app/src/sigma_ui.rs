@@ -12,7 +12,6 @@ use crate::tab::Tab;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Run,
-    OpenSettings,
 }
 
 fn level_fg(ui: &Ui, level: u8) -> Color32 {
@@ -85,31 +84,31 @@ pub fn toolbar(ui: &mut Ui, t: &mut Tab, lib: &Library) -> Option<Action> {
     let why = blocked(t, lib);
     match &t.sigma.result {
         None => {
-            // Without rules the button stays enabled: it opens the rules settings.
-            let no_rules = why.is_some()
-                && lib.ready().is_none()
-                && !lib.loading()
-                && lib.download.is_none()
-                && t.ready();
-            let r = ui
-                .add_enabled(why.is_none() || no_rules, egui::Button::new("Detect"))
-                .on_hover_text(if no_rules {
-                    "No detection rules yet: click to download them or add a rules folder (Settings)"
-                } else {
+            // Without usable rules the button stays enabled: Run opens the
+            // rules settings (App::run_sigma).
+            let can = t.ready() && !lib.loading() && lib.download.is_none();
+            let tip = match &lib.set {
+                _ if lib.ready().is_some() => {
                     "Run the Sigma detection rules over the whole file (Ctrl+Shift+D). \
                      Matched rows get a level mark in the row gutter and are listed in the \
                      Detections panel."
-                });
+                }
+                Some(_) => {
+                    "No rule loaded with these settings (minimum level, folders): click to open them"
+                }
+                None => {
+                    "No detection rules yet: click to download them or add a rules folder (Settings)"
+                }
+            };
+            let r = ui
+                .add_enabled(can, egui::Button::new("Detect"))
+                .on_hover_text(tip);
             let r = match why {
                 Some(w) => r.on_disabled_hover_text(w),
                 None => r,
             };
             if r.clicked() {
-                act = Some(if no_rules {
-                    Action::OpenSettings
-                } else {
-                    Action::Run
-                });
+                act = Some(Action::Run);
             }
         }
         Some(res) => {
@@ -263,69 +262,86 @@ pub fn panel(ui: &mut Ui, t: &mut Tab, lib: &Library) -> (Option<Action>, bool) 
             .desired_width(f32::INFINITY),
     );
     let needle = t.sigma.search.to_lowercase();
+    // One row per level header or rule: only the visible rows are laid out
+    // (thousands of rules can match a large file).
+    enum Item {
+        Level(u8),
+        Rule(usize),
+        Credit,
+    }
+    let mut items = Vec::new();
+    let mut last_level = 0;
+    for (i, (r, _)) in res.hits.iter().enumerate() {
+        let rule = &rules[*r as usize];
+        if !needle.is_empty()
+            && !rule.title.to_lowercase().contains(&needle)
+            && !rule.author.to_lowercase().contains(&needle)
+            && !rule.tags.iter().any(|x| x.to_lowercase().contains(&needle))
+            && !rule.id.to_lowercase().contains(&needle)
+        {
+            continue;
+        }
+        if rule.level != last_level {
+            last_level = rule.level;
+            items.push(Item::Level(rule.level));
+        }
+        items.push(Item::Rule(i));
+    }
+    items.push(Item::Credit);
+    let row_h = ui.spacing().interact_size.y;
     egui::ScrollArea::vertical()
         .id_salt("sigma_rules")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let mut last_level = 0;
-            for (r, rows) in &res.hits {
-                let rule = &rules[*r as usize];
-                if !needle.is_empty()
-                    && !rule.title.to_lowercase().contains(&needle)
-                    && !rule.author.to_lowercase().contains(&needle)
-                    && !rule.tags.iter().any(|x| x.to_lowercase().contains(&needle))
-                    && !rule.id.to_lowercase().contains(&needle)
-                {
-                    continue;
-                }
-                if rule.level != last_level {
-                    last_level = rule.level;
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(LEVELS[rule.level as usize].to_uppercase())
-                            .small()
-                            .strong()
-                            .color(level_fg(ui, rule.level)),
-                    );
-                }
-                let f = Focus::Rule(*r);
-                let on = focus.as_ref() == Some(&f);
-                let resp = ui
-                    .horizontal(|ui| {
-                        badge(ui, rule.level);
-                        // Long titles are cut (full title on hover): the panel keeps its width.
-                        ui.add(
-                            egui::Button::selectable(
-                                on,
-                                match res.bursts.get(r) {
-                                    // A correlation: its bursts, and the rows in them.
-                                    Some(b) => format!(
-                                        "{} ({} × {} rows)",
-                                        rule.title,
-                                        crate::app::fmt_n(*b as u64),
-                                        crate::app::fmt_n(rows.len())
-                                    ),
-                                    None => format!(
-                                        "{} ({})",
-                                        rule.title,
-                                        crate::app::fmt_n(rows.len())
-                                    ),
-                                },
-                            )
-                            .truncate(),
-                        )
-                    })
-                    .inner;
-                let resp = resp.on_hover_ui(|ui| rule_card(ui, rule, false));
-                if resp.clicked() {
-                    set_focus = Some(if on { None } else { Some(f) });
+        .show_rows(ui, row_h, items.len(), |ui, range| {
+            for item in &items[range] {
+                match item {
+                    Item::Level(l) => {
+                        ui.add_sized(
+                            [ui.available_width(), row_h],
+                            egui::Label::new(
+                                RichText::new(LEVELS[*l as usize].to_uppercase())
+                                    .small()
+                                    .strong()
+                                    .color(level_fg(ui, *l)),
+                            ),
+                        );
+                    }
+                    Item::Rule(i) => {
+                        let (r, rows) = &res.hits[*i];
+                        let rule = &rules[*r as usize];
+                        let f = Focus::Rule(*r);
+                        let on = focus.as_ref() == Some(&f);
+                        let label = match res.bursts.get(r) {
+                            // A correlation: its bursts, and the rows in them.
+                            Some(b) => format!(
+                                "{} ({} × {} rows)",
+                                rule.title,
+                                crate::app::fmt_n(*b as u64),
+                                crate::app::fmt_n(rows.len())
+                            ),
+                            None => format!("{} ({})", rule.title, crate::app::fmt_n(rows.len())),
+                        };
+                        let resp = ui
+                            .horizontal(|ui| {
+                                badge(ui, rule.level);
+                                // Long titles are cut (full title on hover): the panel keeps its width.
+                                ui.add(egui::Button::selectable(on, label).truncate())
+                            })
+                            .inner;
+                        let resp = resp.on_hover_ui(|ui| rule_card(ui, rule, false));
+                        if resp.clicked() {
+                            set_focus = Some(if on { None } else { Some(f) });
+                        }
+                    }
+                    Item::Credit => {
+                        if res.hits.is_empty() {
+                            ui.label(RichText::new("No rule matched this file.").weak());
+                        }
+                        ui.add_space(8.0);
+                        credit(ui);
+                    }
                 }
             }
-            if res.hits.is_empty() {
-                ui.label(RichText::new("No rule matched this file.").weak());
-            }
-            ui.add_space(8.0);
-            credit(ui);
         });
     if let Some(f) = set_focus {
         t.sigma.set_focus(f);
@@ -528,15 +544,35 @@ pub fn settings(ui: &mut Ui, s: &mut SigmaSettings, lib: &mut Library) -> bool {
                                 changed = true;
                             }
                         }
-                        if inst.is_some()
-                            && ui
+                        // Remove asks once: the set has to be downloaded again.
+                        let ask = egui::Id::unique(("sigma_remove", src.slug));
+                        let asking = ui.data(|d| d.get_temp::<bool>(ask)).unwrap_or(false);
+                        if inst.is_some() && !asking {
+                            if ui
                                 .add(egui::Button::new("Remove").small())
                                 .on_hover_text("delete the downloaded rules")
                                 .clicked()
-                        {
-                            let _ = lib.remove(src.slug);
-                            s.sets.retain(|x| x != src.slug);
-                            changed = true;
+                            {
+                                ui.data_mut(|d| d.insert_temp(ask, true));
+                            }
+                        } else if inst.is_some() {
+                            ui.label(RichText::new("Delete these rules?").small());
+                            if ui.add(egui::Button::new("Delete").small()).clicked() {
+                                ui.data_mut(|d| d.remove::<bool>(ask));
+                                match lib.remove(src.slug) {
+                                    Ok(()) => {
+                                        s.sets.retain(|x| x != src.slug);
+                                        changed = true;
+                                    }
+                                    Err(e) => {
+                                        lib.message =
+                                            Some((src.slug, Err(format!("cannot delete: {e}"))))
+                                    }
+                                }
+                            }
+                            if ui.add(egui::Button::new("Keep").small()).clicked() {
+                                ui.data_mut(|d| d.remove::<bool>(ask));
+                            }
                         }
                     }
                 }
@@ -604,13 +640,22 @@ pub fn settings(ui: &mut Ui, s: &mut SigmaSettings, lib: &mut Library) -> bool {
         s.profiles.remove(&f);
         changed = true;
     }
-    if ui.button("Add rules folder…").clicked()
-        && let Some(p) = rfd::FileDialog::new().pick_folder()
-        && !s.folders.contains(&p)
-    {
-        s.folders.push(p);
-        changed = true;
-    }
+    ui.horizontal(|ui| {
+        if ui.button("Add rules folder…").clicked()
+            && let Some(p) = rfd::FileDialog::new().pick_folder()
+            && !s.folders.contains(&p)
+        {
+            s.folders.push(p);
+            changed = true;
+        }
+        if ui
+            .add_enabled(!lib.loading(), egui::Button::new("Reload rules"))
+            .on_hover_text("read the rule files again (after editing them on disk)")
+            .clicked()
+        {
+            lib.reload();
+        }
+    });
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.label("Run rules from level");
@@ -659,6 +704,9 @@ pub fn settings(ui: &mut Ui, s: &mut SigmaSettings, lib: &mut Library) -> bool {
     );
     // What is loaded.
     ui.add_space(4.0);
+    if let Some(e) = &lib.load_error {
+        ui.colored_label(ui.visuals().error_fg_color, e);
+    }
     if lib.loading() {
         ui.horizontal(|ui| {
             crate::appearance::spinner(ui);

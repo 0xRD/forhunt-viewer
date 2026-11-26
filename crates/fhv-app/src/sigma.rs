@@ -32,6 +32,9 @@ pub const LICENSE_URL: &str = "https://github.com/SigmaHQ/Detection-Rule-License
 const INFO_FILE: &str = ".forhunt-viewer-rules";
 /// Largest download accepted (LOLDrivers, the largest, is ~100 MB).
 const MAX_DOWNLOAD: u64 = 512 << 20;
+/// Largest unpacked archive and number of entries accepted.
+const MAX_UNPACKED: u64 = 4 << 30;
+const MAX_ENTRIES: usize = 500_000;
 
 /// A public rule set Settings offers to download (D-107).
 pub struct Source {
@@ -193,6 +196,11 @@ pub struct Installed {
     pub files: usize,
 }
 
+/// A full git commit id (anything else from an archive is not shown).
+fn is_commit(c: &str) -> bool {
+    c.len() == 40 && c.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// What is recorded about the downloaded set `slug`.
 pub fn installed(root: &Path, slug: &str) -> Option<Installed> {
     let dir = root.join(slug);
@@ -203,8 +211,13 @@ pub fn installed(root: &Path, slug: &str) -> Option<Installed> {
             .unwrap_or("")
             .to_string()
     };
+    let commit = get("commit");
     Some(Installed {
-        commit: get("commit"),
+        commit: if is_commit(&commit) {
+            commit
+        } else {
+            String::new()
+        },
         downloaded: get("downloaded"),
         files: get("files").parse().unwrap_or(0),
     })
@@ -248,6 +261,10 @@ pub struct Library {
     pub message: Option<(&'static str, Result<String, String>)>,
     /// Downloaded sets, by slug.
     pub installed: std::collections::BTreeMap<&'static str, Installed>,
+    pub load_error: Option<String>,
+    /// Settings the current load was decided for (the check runs once per
+    /// change, not every frame).
+    seen: Option<SigmaSettings>,
 }
 
 impl Library {
@@ -262,12 +279,21 @@ impl Library {
             download: None,
             message: None,
             installed: Default::default(),
+            load_error: None,
+            seen: None,
         };
         l.refresh_installed();
         l
     }
 
+    /// Loads the rules again (rule files edited on disk).
+    pub fn reload(&mut self) {
+        self.loaded_for = None;
+        self.seen = None;
+    }
+
     fn refresh_installed(&mut self) {
+        self.seen = None;
         self.installed = CATALOG
             .iter()
             .filter_map(|s| Some((s.slug, installed(&self.root, s.slug)?)))
@@ -308,7 +334,7 @@ impl Library {
                     self.download = None;
                     if r.is_ok() {
                         self.refresh_installed();
-                        self.loaded_for = None;
+                        self.reload();
                     }
                     self.message = Some((slug, r));
                 }
@@ -323,6 +349,7 @@ impl Library {
         if let Some((key, rx)) = &self.loading {
             match rx.try_recv() {
                 Ok((set, rep)) => {
+                    self.load_error = None;
                     self.loaded_for = Some(key.clone());
                     self.set = Some(Arc::new(set));
                     self.report = Some(rep);
@@ -330,12 +357,22 @@ impl Library {
                     self.loading = None;
                 }
                 Err(TryRecvError::Disconnected) => {
+                    // The load failed: no rules rather than the previous ones.
                     self.loaded_for = Some(key.clone());
                     self.loading = None;
+                    self.set = None;
+                    self.report = None;
+                    self.load_error = Some("the rules could not be loaded (internal error)".into());
+                    self.generation += 1;
                 }
                 Err(TryRecvError::Empty) => {}
             }
         }
+        // Nothing changed since the last check: no file system work.
+        if self.loading.is_none() && self.loaded_for.is_some() && self.seen.as_ref() == Some(s) {
+            return self.download.is_some();
+        }
+        self.seen = Some(s.clone());
         let key = LoadKey {
             paths: self.paths(s),
             profiles: s
@@ -431,7 +468,7 @@ impl Library {
         let src = source(slug).ok_or("unknown set")?;
         std::fs::remove_dir_all(self.root.join(src.slug)).map_err(|e| e.to_string())?;
         self.refresh_installed();
-        self.loaded_for = None;
+        self.reload();
         Ok(())
     }
 }
@@ -502,24 +539,45 @@ pub fn download(
 /// into place), keeping only the source's rule folders and its licence and
 /// readme files.
 pub fn install_tar_gz(root: &Path, r: impl Read, src: &Source) -> Result<String, String> {
-    let stage = root.join(format!(".staging-{}", std::process::id()));
+    // Unique per download (a cancelled download blocked in a read may still
+    // be running); leftovers of earlier runs are swept.
+    sweep_leftovers(root);
+    let nonce = format!(
+        "{}-{}-{}",
+        src.slug,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    );
+    let stage = root.join(format!(".staging-{nonce}"));
     let _ = std::fs::remove_dir_all(&stage);
     std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
     let res = (|| {
-        let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(r));
+        // Bounded unpacked size and entry count (a hostile archive).
+        let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(r).take(MAX_UNPACKED));
+        let mut entries = 0usize;
         let mut commit = String::new();
         for e in ar
             .entries()
             .map_err(|e| format!("not a tar.gz archive: {e}"))?
         {
             let mut e = e.map_err(|e| format!("damaged archive: {e}"))?;
+            entries += 1;
+            if entries > MAX_ENTRIES {
+                return Err(format!("the archive holds more than {MAX_ENTRIES} entries"));
+            }
             let ty = e.header().entry_type();
             if ty.is_pax_global_extensions() {
                 // GitHub archives name their commit in the global header.
                 if let Ok(Some(exts)) = e.pax_extensions() {
                     for x in exts.flatten() {
                         if x.key() == Ok("comment") {
-                            commit = x.value().unwrap_or("").trim().to_string();
+                            // A commit id, or nothing (the text is shown later).
+                            let c = x.value().unwrap_or("").trim();
+                            if is_commit(c) {
+                                commit = c.to_string();
+                            }
                         }
                     }
                 }
@@ -574,7 +632,7 @@ pub fn install_tar_gz(root: &Path, r: impl Read, src: &Source) -> Result<String,
         );
         std::fs::write(dir.join(INFO_FILE), info).map_err(|e| e.to_string())?;
         let dest = root.join(src.slug);
-        let old = root.join(format!(".old-{}", std::process::id()));
+        let old = root.join(format!(".old-{nonce}"));
         if dest.exists() {
             std::fs::rename(&dest, &old)
                 .map_err(|e| format!("cannot replace the previous rules: {e}"))?;
@@ -599,6 +657,26 @@ pub fn install_tar_gz(root: &Path, r: impl Read, src: &Source) -> Result<String,
     res
 }
 
+/// Staging and old folders of earlier downloads left by a crash (older
+/// than an hour: a download still running keeps its own).
+fn sweep_leftovers(root: &Path) {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|d| d.as_secs() > 3600);
+        if (n.starts_with(".staging-") || n.starts_with(".old-")) && old {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
 fn walkdir_count(dir: &Path) -> usize {
     let mut n = 0;
     let mut stack = vec![dir.to_path_buf()];
@@ -609,9 +687,10 @@ fn walkdir_count(dir: &Path) -> usize {
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
-                if p.file_name()
-                    .is_some_and(|n| n != "config" && n != "scripts")
-                {
+                if p.file_name().is_some_and(|n| {
+                    let n = n.to_string_lossy();
+                    n != "config" && n != "scripts" && !n.starts_with('.')
+                }) {
                     stack.push(p);
                 }
             } else if p.extension().is_some_and(|x| x == "yml" || x == "yaml") {
@@ -704,40 +783,32 @@ fn level_num(s: &str) -> u8 {
 
 /// Flattens a JSON payload into fields: forhunt's flat object, or
 /// EvtxECmd's `{"EventData":{"Data":[{"@Name":..,"#text":..}]}}`.
-fn flatten(v: &serde_json::Value, name: Option<&str>, out: &mut Vec<(String, Val<'static>)>) {
+fn flatten(v: serde_json::Value, name: Option<&str>, out: &mut Vec<(String, Val<'static>)>) {
     use serde_json::Value as J;
     match v {
-        J::Object(m) => {
-            if let Some(n) = m.get("@Name").and_then(J::as_str) {
-                let val = m.get("#text").map(scalar).unwrap_or(Val::Str("".into()));
-                out.push((n.to_string(), val));
+        J::Object(mut m) => {
+            if let Some(J::String(n)) = m.remove("@Name") {
+                let val = m.remove("#text").map_or(Val::Str("".into()), scalar);
+                out.push((n, val));
                 return;
             }
             for (k, x) in m {
                 if k.starts_with('@') || k == "xmlns" {
                     continue;
                 }
+                // `#text` is the value of the element named by the parent.
                 let key = if k == "#text" {
-                    name.unwrap_or("Data")
+                    name.unwrap_or("Data").to_string()
                 } else {
-                    k.as_str()
+                    k
                 };
-                match x {
-                    // Wrappers: EventData, UserData and its element.
-                    J::Object(_)
-                        if matches!(k.as_str(), "EventData" | "UserData")
-                            || name == Some("UserData") =>
-                    {
-                        flatten(x, Some(k), out)
-                    }
-                    _ => flatten(x, Some(key), out),
-                }
+                flatten(x, Some(&key), out);
             }
         }
         J::Array(a) => {
-            let base = name.unwrap_or("Data");
+            let base = name.unwrap_or("Data").to_string();
             let named = a.iter().all(|x| x.get("@Name").is_some());
-            for (i, x) in a.iter().enumerate() {
+            for (i, x) in a.into_iter().enumerate() {
                 if named {
                     flatten(x, None, out);
                 } else {
@@ -749,12 +820,13 @@ fn flatten(v: &serde_json::Value, name: Option<&str>, out: &mut Vec<(String, Val
     }
 }
 
-fn scalar(v: &serde_json::Value) -> Val<'static> {
+/// A JSON scalar as an event value (strings moved, not copied).
+fn scalar(v: serde_json::Value) -> Val<'static> {
     use serde_json::Value as J;
     match v {
-        J::String(s) => Val::Str(s.clone().into()),
+        J::String(s) => Val::Str(s.into()),
         J::Number(n) => Val::Num(n.to_string().into()),
-        J::Bool(b) => Val::Bool(*b),
+        J::Bool(b) => Val::Bool(b),
         J::Null => Val::Null,
         other => Val::Str(other.to_string().into()),
     }
@@ -782,7 +854,7 @@ pub fn row_event(cols: &Cols, cell: &dyn Fn(usize) -> Option<String>) -> EventVi
         Some(p) => {
             let text = get(Some(p));
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                flatten(&v, None, &mut fields);
+                flatten(v, None, &mut fields);
             }
         }
         None => {
@@ -1084,11 +1156,24 @@ pub fn poll(t: &mut Tab) -> bool {
             t.sigma.job = None;
             match r {
                 Ok(d) => {
+                    // A re-run keeps the filter: a level as it is, a rule
+                    // by its id (indexes change when the rules reload).
+                    let focus = match (t.sigma.focus.clone(), &t.sigma.result) {
+                        (Some(Focus::Rule(r)), Some(old)) => {
+                            let id = old.set.rules().get(r as usize).map(|x| x.id.clone());
+                            id.and_then(|id| d.set.rules().iter().position(|x| x.id == id))
+                                .map(|k| Focus::Rule(k as u32))
+                        }
+                        (f, _) => f,
+                    };
+                    let first = t.sigma.result.is_none();
+                    let not = t.sigma.focus_not;
                     t.sigma.result = Some(Arc::new(d));
-                    t.sigma.panel = true;
-                    // A rule filter of the previous run may name another rule.
+                    // The panel opens on the first run, not again once closed.
+                    t.sigma.panel |= first;
                     if t.sigma.focus.is_some() {
-                        t.sigma.set_focus(None);
+                        t.sigma.set_focus(focus);
+                        t.sigma.focus_not = not && t.sigma.focus.is_some();
                         t.requery();
                     }
                     t.repaint_cells();
@@ -1134,7 +1219,9 @@ fn run(
         .and_then(|ci| ci.primary_time.and_then(|c| ci.cols.get(c)))
         .and_then(|c| c.time.as_ref())
         .map(|t| t.ticks.as_slice());
-    let correlate = set.has_correlations();
+    // Without event times every match would be "at the same instant":
+    // correlations need the time column.
+    let correlate = set.has_correlations() && ticks.is_some();
     type Part = (
         Vec<(u32, Vec<u32>)>,
         Vec<(forhunt_core::sigma::corr::Obs, u32)>,
@@ -1166,10 +1253,12 @@ fn run(
             let mut ev = row_event(&cols, &cell);
             m.matches(&ev, &mut hits);
             if !hits.is_empty() {
-                if correlate {
-                    if let Some(t) = ticks.and_then(|t| t.get(row as usize)) {
-                        ev.ts = forhunt_core::Ts(*t);
-                    }
+                // Rows with a blank or unreadable time take no part.
+                if let Some(&t) = ticks
+                    .and_then(|t| t.get(row as usize))
+                    .filter(|&&t| correlate && t != i64::MIN)
+                {
+                    ev.ts = forhunt_core::Ts(t);
                     let mut o = Vec::new();
                     set.observe(&ev, &hits, &mut o);
                     obs.extend(o.into_iter().map(|x| (x, row as u32)));
@@ -1187,21 +1276,26 @@ fn run(
     let mut row_top: HashMap<u32, u8> = HashMap::new();
     let mut obs = Vec::new();
     table
-        .par_block_list(&blocks, map, |_, (v, o)| {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(fhv_engine::Error::Cancelled);
-            }
-            obs.extend(o);
-            for (row, rs) in v {
-                // Rules used only by correlations are not shown.
-                for r in rs.into_iter().filter(|&r| !rules[r as usize].hidden) {
-                    let t = row_top.entry(row).or_default();
-                    *t = (*t).max(rules[r as usize].level);
-                    per_rule.entry(r).or_default().insert(row);
+        .par_block_list_until(
+            &blocks,
+            &|| cancel.load(Ordering::Relaxed),
+            map,
+            |_, (v, o)| {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(fhv_engine::Error::Cancelled);
                 }
-            }
-            Ok(())
-        })
+                obs.extend(o);
+                for (row, rs) in v {
+                    // Rules used only by correlations are not shown.
+                    for r in rs.into_iter().filter(|&r| !rules[r as usize].hidden) {
+                        let t = row_top.entry(row).or_default();
+                        *t = (*t).max(rules[r as usize].level);
+                        per_rule.entry(r).or_default().insert(row);
+                    }
+                }
+                Ok(())
+            },
+        )
         .map_err(|e| e.to_string())?;
     // Correlations: every member row of a burst is a row of the rule.
     let mut bursts: HashMap<u32, u32> = HashMap::new();
@@ -1238,18 +1332,25 @@ fn run(
         .iter()
         .filter(|r| !r.hidden && r.fields.iter().any(|f| lacking.contains(&f.as_str())))
         .count();
-    let note = if cols.channel.is_none() || cols.eid.is_none() {
-        Some("No Channel / EventId column: rules that name a channel or event id cannot match this file.".into())
+    let mut notes: Vec<String> = Vec::new();
+    if cols.channel.is_none() || cols.eid.is_none() {
+        notes.push("No Channel / EventId column: rules that name a channel or event id cannot match this file.".into());
     } else if cols.payload.is_none() {
-        Some("No Payload column: the columns are taken as the event's fields.".into())
-    } else if blind > 0 {
-        Some(format!(
+        notes.push("No Payload column: the columns are taken as the event's fields.".into());
+    }
+    if blind > 0 {
+        notes.push(format!(
             "{blind} rules also test {} of the event, which this file does not hold: they cannot match here (`forhunt sigma` on the logs can).",
             lacking.join(" / ")
-        ))
-    } else {
-        None
-    };
+        ));
+    }
+    if set.has_correlations() && ticks.is_none() {
+        notes.push(
+            "No time column was recognised: correlation rules (counts over time) were not run."
+                .into(),
+        );
+    }
+    let note = (!notes.is_empty()).then(|| notes.join("\n"));
     Ok(Detections {
         set,
         generation,
@@ -1381,7 +1482,7 @@ mod tests {
     fn payloads_flatten() {
         let mut out = Vec::new();
         flatten(
-            &serde_json::from_str(r#"{"CommandLine":"a b","LogonType":3,"X":null}"#).unwrap(),
+            serde_json::from_str(r#"{"CommandLine":"a b","LogonType":3,"X":null}"#).unwrap(),
             None,
             &mut out,
         );
@@ -1389,12 +1490,12 @@ mod tests {
         assert_eq!(out[1], ("LogonType".into(), Val::Num("3".into())));
         let mut out = Vec::new();
         let evtxecmd = r##"{"EventData":{"Data":[{"@Name":"SubjectUserName","#text":"bob"},{"@Name":"Empty"}],"Binary":""}}"##;
-        flatten(&serde_json::from_str(evtxecmd).unwrap(), None, &mut out);
+        flatten(serde_json::from_str(evtxecmd).unwrap(), None, &mut out);
         assert_eq!(out[0], ("SubjectUserName".into(), Val::Str("bob".into())));
         assert_eq!(out[1].0, "Empty");
         let mut out = Vec::new();
         flatten(
-            &serde_json::from_str(r#"{"EventData":{"Data":["a","b"]}}"#).unwrap(),
+            serde_json::from_str(r#"{"EventData":{"Data":["a","b"]}}"#).unwrap(),
             None,
             &mut out,
         );
@@ -1456,6 +1557,78 @@ mod tests {
             1,
             "no staging left"
         );
+    }
+
+    /// A tar.gz of raw entries: (type, path, data). Paths are written as
+    /// bytes, so `..` and links get through to the unpacker.
+    fn raw_tar_gz(entries: &[(tar::EntryType, &str, &[u8])]) -> Vec<u8> {
+        let mut tarb = tar::Builder::new(Vec::new());
+        for (ty, path, data) in entries {
+            let mut h = tar::Header::new_ustar();
+            h.set_entry_type(*ty);
+            h.as_ustar_mut().unwrap().name[..path.len()].copy_from_slice(path.as_bytes());
+            if *ty == tar::EntryType::Symlink {
+                h.set_link_name("/etc/passwd").unwrap();
+                h.set_size(0);
+            } else {
+                h.set_size(data.len() as u64);
+            }
+            h.set_mode(0o644);
+            h.set_cksum();
+            tarb.append(&h, *data).unwrap();
+        }
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut gz, &tarb.into_inner().unwrap()).unwrap();
+        gz.finish().unwrap()
+    }
+
+    const RULE: &[u8] =
+        b"title: R\nid: r\nlevel: high\ndetection:\n  a:\n    A: x\n  condition: a\n";
+
+    #[test]
+    fn hostile_archives() {
+        use tar::EntryType as T;
+        let src = source("hayabusa-rules").unwrap();
+        // A path climbing out of the folder: refused, nothing installed.
+        let root = tempfile::tempdir().unwrap();
+        let gz = raw_tar_gz(&[
+            (T::Regular, "x/sigma/r.yml", RULE),
+            (T::Regular, "x/sigma/../../../escape.yml", RULE),
+        ]);
+        assert!(install_tar_gz(root.path(), &gz[..], src).is_err());
+        assert!(!root.path().join("hayabusa-rules").exists());
+        assert!(!root.path().parent().unwrap().join("escape.yml").exists());
+        assert_eq!(
+            std::fs::read_dir(root.path()).unwrap().count(),
+            0,
+            "no staging left"
+        );
+        // Links are skipped, the rest installs.
+        let gz = raw_tar_gz(&[
+            (T::Regular, "x/sigma/r.yml", RULE),
+            (T::Symlink, "x/sigma/link.yml", b""),
+        ]);
+        install_tar_gz(root.path(), &gz[..], src).unwrap();
+        let dir = root.path().join("hayabusa-rules/sigma");
+        assert!(dir.join("r.yml").is_file());
+        assert!(std::fs::symlink_metadata(dir.join("link.yml")).is_err());
+        // A comment that is not a commit id is not recorded.
+        let gz = raw_tar_gz(&[
+            (
+                T::XGlobalHeader,
+                "pax_global_header",
+                b"33 comment=<b>not a commit</b>\n",
+            ),
+            (T::Regular, "x/sigma/r.yml", RULE),
+        ]);
+        install_tar_gz(root.path(), &gz[..], src).unwrap();
+        assert_eq!(installed(root.path(), "hayabusa-rules").unwrap().commit, "");
+        std::fs::write(
+            root.path().join("hayabusa-rules").join(INFO_FILE),
+            "commit=abc\nfiles=1\n",
+        )
+        .unwrap();
+        assert_eq!(installed(root.path(), "hayabusa-rules").unwrap().commit, "");
     }
 
     #[test]

@@ -113,6 +113,14 @@ struct ExportDlg {
     jsonl: bool,
 }
 
+/// State of the hidden FHV_AUTO_DETECT hook (D-106).
+#[derive(Clone, Copy)]
+struct AutoDetect {
+    started: bool,
+    /// `FHV_AUTO_DETECT=settings`: open the rules settings at the end.
+    settings: bool,
+}
+
 pub struct App {
     pub(crate) tabs: Vec<Tab>,
     active: usize,
@@ -159,9 +167,10 @@ pub struct App {
     pub(crate) rules: std::sync::Arc<Vec<crate::rules::Rule>>,
     /// Sigma rules (loaded once for every tab) and their download (D-101).
     pub(crate) sigma: crate::sigma::Library,
-    /// Hidden (env FHV_AUTO_DETECT): run detection on the first tab once it
+    /// Hidden (env FHV_AUTO_DETECT, `=settings` also opens the rules
+    /// settings): run detection on the first tab once it
     /// is ready and select its first detected row (screenshots, timing).
-    auto_detect: Option<u8>,
+    auto_detect: Option<AutoDetect>,
     /// Settings opened for the rules: show their section (scrolled to, open).
     pub(crate) sigma_scroll: bool,
 }
@@ -219,7 +228,10 @@ impl App {
             rules_dlg: None,
             rules: Default::default(),
             sigma: crate::sigma::Library::new(rules_root),
-            auto_detect: std::env::var_os("FHV_AUTO_DETECT").map(|_| 0),
+            auto_detect: std::env::var("FHV_AUTO_DETECT").ok().map(|v| AutoDetect {
+                started: false,
+                settings: v == "settings",
+            }),
             sigma_scroll: false,
             style: Style {
                 filter_h: 24.0,
@@ -470,11 +482,17 @@ impl App {
             self.open_rules_settings();
             return;
         };
-        if let Some(t) = self.tabs.get_mut(self.active)
-            && crate::sigma_ui::blocked(t, &self.sigma).is_none()
-        {
-            crate::sigma::start(t, set, generation);
-            t.sigma.panel = true;
+        let Some(t) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        match crate::sigma_ui::blocked(t, &self.sigma) {
+            None => {
+                crate::sigma::start(t, set, generation);
+                // The first run shows the panel; later runs leave it as is.
+                t.sigma.panel |= t.sigma.result.is_none();
+            }
+            // Ctrl+Shift+D says why nothing happens.
+            Some(why) => t.status = Some(format!("Detection not started: {why}")),
         }
     }
 
@@ -989,10 +1007,8 @@ impl App {
                 t.requery();
             }
             ui.separator();
-            match crate::sigma_ui::toolbar(ui, t, &self.sigma) {
-                Some(crate::sigma_ui::Action::Run) => *sigma_run = true,
-                Some(crate::sigma_ui::Action::OpenSettings) => self.sigma_scroll = true,
-                None => {}
+            if crate::sigma_ui::toolbar(ui, t, &self.sigma) == Some(crate::sigma_ui::Action::Run) {
+                *sigma_run = true;
             }
             ui.separator();
             let any = t.filters.iter().any(ColFilter::is_active)
@@ -1259,20 +1275,6 @@ impl App {
                 );
             }
             ui.separator();
-            if t.progress_text().is_none()
-                && let Some((what, frac)) = t.sigma.progress()
-            {
-                ui.add(
-                    egui::ProgressBar::new(frac)
-                        .desired_width(140.0)
-                        .show_percentage(),
-                );
-                ui.label(what);
-                if ui.small_button("cancel (Esc)").clicked() {
-                    t.sigma.cancel();
-                }
-                ui.separator();
-            }
             if let Some((what, frac)) = t.progress_text() {
                 if frac >= 0.0 {
                     ui.add(egui::ProgressBar::new(frac).desired_width(140.0).text(what));
@@ -3254,41 +3256,44 @@ impl eframe::App for App {
 
 impl App {
     fn auto_detect_step(&mut self) {
-        let Some(stage) = self.auto_detect else {
+        let Some(AutoDetect { started, settings }) = self.auto_detect else {
             return;
         };
         let Some(t) = self.tabs.first() else {
             return;
         };
-        match stage {
-            0 if t.ready() && t.job.is_none() && self.sigma.ready().is_some() => {
+        if !started {
+            if t.ready() && t.job.is_none() && self.sigma.ready().is_some() {
                 self.active = 0;
                 self.run_sigma();
-                self.auto_detect = Some(1);
+                self.auto_detect = Some(AutoDetect {
+                    started: true,
+                    settings,
+                });
             }
-            1 if !t.sigma.running() && t.sigma.result.is_some() => {
-                let t = &mut self.tabs[0];
-                if let Some(res) = &t.sigma.result {
-                    eprintln!(
-                        "detection: {} rows detected, {} rows read, {:.0} ms",
-                        res.all.len(),
-                        res.read,
-                        res.ms
-                    );
-                    let row = (1..=5u8).rev().find_map(|l| res.level[l as usize].min());
-                    if let Some(p) = row.and_then(|r| t.view.position_of(r)) {
-                        t.grid.selected = Some(p);
-                        t.grid.top = (p as f64 - 5.0).max(0.0);
-                    }
-                }
-                // FHV_AUTO_DETECT=settings: also show the rules settings.
-                if std::env::var("FHV_AUTO_DETECT").is_ok_and(|v| v == "settings") {
-                    self.open_rules_settings();
-                }
-                self.auto_detect = None;
-            }
-            _ => {}
+            return;
         }
+        if t.sigma.running() {
+            return;
+        }
+        let t = &mut self.tabs[0];
+        if let Some(res) = &t.sigma.result {
+            eprintln!(
+                "detection: {} rows detected, {} rows read, {:.0} ms",
+                res.all.len(),
+                res.read,
+                res.ms
+            );
+            let row = (1..=5u8).rev().find_map(|l| res.level[l as usize].min());
+            if let Some(p) = row.and_then(|r| t.view.position_of(r)) {
+                t.grid.selected = Some(p);
+                t.grid.top = (p as f64 - 5.0).max(0.0);
+            }
+        }
+        if settings {
+            self.open_rules_settings();
+        }
+        self.auto_detect = None;
     }
 
     /// 40 frames of smooth scrolling (3 rows/frame), then 10 jumps, once the
