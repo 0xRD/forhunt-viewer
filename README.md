@@ -202,6 +202,34 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
     detections), except rules testing an event's `Version`, `Task` or
     `Opcode`, which no CSV layout keeps (the panel says how many).
 
+  - **How it runs.**
+    1. Downloaded sets are unpacked (size limits, no links) into the rules
+       folder:
+       - Windows: `%LOCALAPPDATA%\forhunt-viewer\rules`
+       - macOS: `~/Library/Application Support/forhunt-viewer/rules`
+       - Linux: `~/.local/share/forhunt-viewer/rules`
+    2. Rules are compiled once in the background (*Reload rules* after editing
+       your own).
+    3. *Detect* picks, from the `Channel` / `EventId` columns, only the rows
+       some rule can match.
+    4. Those rows are rebuilt as events (fields from `Payload` or from the
+       columns) and matched in parallel. A rule is evaluated only when one of
+       its literals is found in the row.
+    5. Correlations then run on the time column. With no time column they are
+       skipped, and the panel says so.
+    6. The results are bitmaps per rule and per level. They drive the gutter
+       marks, the fill, the panel and the filters without scanning the file
+       again.
+
+  > **Warning: some Sigma rules can trigger antivirus / EDR detections.** Rule
+  > files contain the strings they detect: malware and attack tool names,
+  > command lines, encoded PowerShell, mimikatz keywords. Some security
+  > products flag them when they are downloaded or read, and may quarantine
+  > part of a set or raise an alert on the analysis machine. Download rules
+  > where that is expected, or exclude the rules folder above with your
+  > security team's approval. The viewer only reads rules: it never runs
+  > anything they contain.
+
   ![Sigma detections: panel by level, gutter marks, rules of the selected row](docs/screenshots/sigma.png)
 - **Tags and notes** on rows; "tagged only" filter.
 - **Bad rows** (wrong field count, broken quotes) are counted and can be
