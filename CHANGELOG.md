@@ -23,7 +23,11 @@ Sigma detection, built in (forhunt 0.8.0's engine; no Hayabusa needed).
   mbabinski, LOLDrivers, each with its licence, downloaded / updated / removed on
   request. Your own folders get a logsource profile (Auto, Sigma, As written).
 - Generic Sigma rules (SigmaHQ...) run on the logs their logsource names;
-  correlation rules and `| count() by` mark the rows of each burst.
+  correlation rules and `| count() by` mark the rows of each burst (on files
+  with a time column; the panel says when there is none).
+- *Reload rules* after editing rule files; *Remove* asks before deleting a
+  downloaded set. Downloads are unpacked with size and entry limits, links and
+  paths outside the folder refused.
 
 ## 0.8.0 (2026-11-14)
 

@@ -404,3 +404,83 @@ fn same_detections_as_forhunt_cli() {
         "viewer only: {only_mine:?}\ncli only: {only_theirs:?}"
     );
 }
+
+/// Without a time column, correlations are not run (every match would be
+/// "at the same instant") and the panel says so.
+#[test]
+fn correlations_need_a_time_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let rules = dir.path().join("r");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(
+        rules.join("r.yml"),
+        "title: Evil Image\nname: evil\nid: e1\nlevel: medium\nauthor: A\n\
+         detection:\n  sel:\n    Image|endswith: '\\evil.exe'\n  condition: sel\n---\n\
+         title: Many Evil\nid: e2\nlevel: high\nauthor: A\n\
+         correlation:\n  type: event_count\n  rules: [evil]\n  timespan: 1h\n  condition:\n    gte: 2\n",
+    )
+    .unwrap();
+    let file = dir.path().join("edr.csv");
+    let mut s = String::from("Host,Image\n");
+    for i in 0..20 {
+        s.push_str(&format!(
+            "ws1,C:\\x\\{}.exe\n",
+            if i % 5 == 0 { "evil" } else { "good" }
+        ));
+    }
+    std::fs::write(&file, s).unwrap();
+    let mut h = harness_with(dir.path(), &file, settings_with(&rules));
+    wait(&mut h, "ready", |a| {
+        a.tabs[0].ready() && a.tabs[0].job.is_none() && a.sigma.ready().is_some()
+    });
+    h.state_mut().run_sigma();
+    wait(&mut h, "detection", |a| {
+        a.tabs[0].sigma.result.is_some() && !a.tabs[0].sigma.running()
+    });
+    let res = h.state().tabs[0].sigma.result.clone().unwrap();
+    let rule = |id: &str| res.set.rules().iter().position(|r| r.id == id).unwrap() as u32;
+    // The correlation did not run; its base rule stays hidden (it only
+    // feeds the correlation, as in forhunt).
+    assert!(!res.hits.iter().any(|(r, _)| *r == rule("e2")));
+    assert_eq!(res.all.len(), 0);
+    assert!(res.note.as_deref().unwrap().contains("No time column"));
+}
+
+/// A table job cancelled while detection runs does not stop it, and a
+/// re-run keeps the rule the view is focused on.
+#[test]
+fn detection_survives_table_cancel_and_rerun_keeps_focus() {
+    let dir = tempfile::tempdir().unwrap();
+    let rules = rules_dir(dir.path());
+    let file = forhunt_csv(dir.path());
+    let mut h = harness_with(dir.path(), &file, settings_with(&rules));
+    wait(&mut h, "ready", |a| {
+        a.tabs[0].ready() && a.tabs[0].job.is_none() && a.sigma.ready().is_some()
+    });
+    // The table's own cancel flag is raised (a superseded filter job).
+    h.state().tabs[0].table.progress.cancel();
+    h.state_mut().run_sigma();
+    wait(&mut h, "detection", |a| {
+        a.tabs[0].sigma.result.is_some() && !a.tabs[0].sigma.running()
+    });
+    h.state().tabs[0].table.progress.reset_cancel();
+    assert_eq!(
+        h.state().tabs[0].sigma.result.as_ref().unwrap().all.len(),
+        60
+    );
+    h.get_by_label_contains("Encoded PowerShell (10)").click();
+    h.step();
+    wait(&mut h, "rule filter", |a| {
+        a.tabs[0].job.is_none() && a.tabs[0].view.len() == 10
+    });
+    let focus = h.state().tabs[0].sigma.focus.clone();
+    assert!(focus.is_some());
+    h.state_mut().run_sigma();
+    wait(&mut h, "re-run", |a| {
+        a.tabs[0].sigma.result.is_some() && !a.tabs[0].sigma.running()
+    });
+    assert_eq!(h.state().tabs[0].sigma.focus, focus);
+    wait(&mut h, "view kept", |a| {
+        a.tabs[0].job.is_none() && a.tabs[0].view.len() == 10
+    });
+}

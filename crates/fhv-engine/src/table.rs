@@ -758,6 +758,19 @@ impl Table {
         &self,
         blocks: &[Range<u64>],
         map: impl Fn(&Block<'_>) -> T + Sync,
+        consume: impl FnMut(u64, T) -> Result<()>,
+    ) -> Result<()> {
+        self.par_block_list_until(blocks, &|| self.progress.cancelled(), map, consume)
+    }
+
+    /// [`Table::par_block_list`] stopped by `stop` instead of the table's
+    /// cancel flag (work that runs beside the table's jobs, such as Sigma
+    /// detection, is not cancelled by theirs).
+    pub fn par_block_list_until<T: Send>(
+        &self,
+        blocks: &[Range<u64>],
+        stop: &(dyn Fn() -> bool + Sync),
+        map: impl Fn(&Block<'_>) -> T + Sync,
         mut consume: impl FnMut(u64, T) -> Result<()>,
     ) -> Result<()> {
         use rayon::prelude::*;
@@ -765,7 +778,7 @@ impl Table {
         let h = self.header_rows();
         let window = rayon::current_num_threads().max(1) * 4;
         for w in blocks.chunks(window) {
-            if self.progress.cancelled() {
+            if stop() {
                 return Err(Error::Cancelled);
             }
             // Row offsets of each block, taken under one read lock.
