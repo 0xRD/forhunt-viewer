@@ -172,6 +172,12 @@ the error shown in the UI.
   (Ctrl+F, Ctrl+G, arrows, Ctrl+C); dark and light themes.
 - **forhunt integration.** Detect `ForhuntId`; copy
   `forhunt show <id> -p <evidence>`; export tagged ids.
+- **Sigma detection** (`sigma.rs`, `sigma_ui.rs`, D-101 to D-106). Rules load
+  once in the background (forhunt's engine) and are shared by the tabs; a run
+  turns candidate rows (Channel / EventId dictionaries) into events from their
+  cells and matches them in parallel blocks. Results are per-rule and per-level
+  bitmaps: the grid paints the level of the prepared rows (gutter mark, fill,
+  tested cells), the panel's picks become an `Expr::Rows` filter term.
 
 ## OS integration
 

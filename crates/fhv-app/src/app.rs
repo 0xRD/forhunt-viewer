@@ -157,6 +157,13 @@ pub struct App {
     /// Coloring rules editor, and the rules the tabs use (D-065).
     pub(crate) rules_dlg: Option<crate::rules::Editor>,
     pub(crate) rules: std::sync::Arc<Vec<crate::rules::Rule>>,
+    /// Sigma rules (loaded once for every tab) and their download (D-101).
+    pub(crate) sigma: crate::sigma::Library,
+    /// Hidden (env FHV_AUTO_DETECT): run detection on the first tab once it
+    /// is ready and select its first detected row (screenshots, timing).
+    auto_detect: Option<u8>,
+    /// Settings opened for the rules: show their section (scrolled to, open).
+    pub(crate) sigma_scroll: bool,
 }
 
 impl App {
@@ -174,6 +181,11 @@ impl App {
         crate::fonts::install(&cc.egui_ctx, &Default::default(), None);
         // Ctrl+= / Ctrl+- / Ctrl+0 size the grid font (appearance.rs).
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        let rules_root = if cfg!(test) {
+            cache_dir.join("rules")
+        } else {
+            crate::sigma::default_root()
+        };
         let mut app = App {
             tabs: Vec::new(),
             active: 0,
@@ -206,6 +218,9 @@ impl App {
             title: String::new(),
             rules_dlg: None,
             rules: Default::default(),
+            sigma: crate::sigma::Library::new(rules_root),
+            auto_detect: std::env::var_os("FHV_AUTO_DETECT").map(|_| 0),
+            sigma_scroll: false,
             style: Style {
                 filter_h: 24.0,
                 ..Style::default()
@@ -377,6 +392,10 @@ impl App {
         let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
         let cmd_shift = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
         let query = ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::L)));
+        // Before Ctrl+D (detail pane), which it would also match.
+        if ctx.input_mut(|i| i.consume_shortcut(&cmd_shift(Key::D))) {
+            self.run_sigma();
+        }
         if ctx.input_mut(|i| i.consume_shortcut(&cmd(Key::D))) {
             self.settings.detail_pane = !self.settings.detail_pane;
             self.settings.save();
@@ -435,6 +454,27 @@ impl App {
         }
         if esc && let Some(t) = self.tab() {
             t.cancel_job();
+            t.sigma.cancel();
+        }
+    }
+
+    /// Opens Settings at the Detection rules section.
+    pub(crate) fn open_rules_settings(&mut self) {
+        self.appearance.settings_open = true;
+        self.sigma_scroll = true;
+    }
+
+    /// Runs the Sigma rules over the active tab (toolbar, menu, Ctrl+Shift+D).
+    pub(crate) fn run_sigma(&mut self) {
+        let Some((set, generation)) = self.sigma.ready() else {
+            self.open_rules_settings();
+            return;
+        };
+        if let Some(t) = self.tabs.get_mut(self.active)
+            && crate::sigma_ui::blocked(t, &self.sigma).is_none()
+        {
+            crate::sigma::start(t, set, generation);
+            t.sigma.panel = true;
         }
     }
 
@@ -761,6 +801,32 @@ impl App {
                     }
                 });
             });
+            ui.menu_button("Detection", |ui| {
+                let blocked = self
+                    .tab_ref()
+                    .map_or(Some("open a file first"), |t| crate::sigma_ui::blocked(t, &self.sigma));
+                let r = ui
+                    .add_enabled(blocked.is_none(), egui::Button::new("Run Sigma detection").shortcut_text("Ctrl+Shift+D"));
+                let r = match blocked {
+                    Some(w) => r.on_disabled_hover_text(w),
+                    None => r,
+                };
+                if r.clicked() {
+                    ui.close();
+                    self.run_sigma();
+                }
+                let has = self.tab_ref().is_some_and(|t| t.sigma.result.is_some() || t.sigma.running());
+                if let Some(t) = self.tabs.get_mut(self.active) {
+                    let mut on = t.sigma.panel;
+                    if ui.add_enabled(has, egui::Checkbox::new(&mut on, "Detections panel")).changed() {
+                        t.sigma.panel = on;
+                    }
+                }
+                if ui.button("Detection rules…").on_hover_text("download rules, add your own (Settings)").clicked() {
+                    ui.close();
+                    self.open_rules_settings();
+                }
+            });
             ui.menu_button("forhunt", |ui| {
                 if ui.button("Evidence path for commands…").clicked() {
                     ui.close();
@@ -826,6 +892,14 @@ impl App {
 
     fn toolbar(&mut self, ui: &mut Ui) {
         let focus = std::mem::take(&mut self.focus_search);
+        let mut sigma_run = false;
+        self.toolbar_inner(ui, focus, &mut sigma_run);
+        if sigma_run {
+            self.run_sigma();
+        }
+    }
+
+    fn toolbar_inner(&mut self, ui: &mut Ui, focus: bool, sigma_run: &mut bool) {
         let Some(t) = self.tabs.get_mut(self.active) else {
             return;
         };
@@ -915,8 +989,15 @@ impl App {
                 t.requery();
             }
             ui.separator();
+            match crate::sigma_ui::toolbar(ui, t, &self.sigma) {
+                Some(crate::sigma_ui::Action::Run) => *sigma_run = true,
+                Some(crate::sigma_ui::Action::OpenSettings) => self.sigma_scroll = true,
+                None => {}
+            }
+            ui.separator();
             let any = t.filters.iter().any(ColFilter::is_active)
                 || t.query.residual.is_some()
+                || t.sigma.focus.is_some()
                 || t.tagged_only
                 || t.bad_only
                 || (t.search_filter && !t.search.is_empty());
@@ -930,6 +1011,7 @@ impl App {
                 crate::querybar::set_residual(t, None);
                 t.tagged_only = false;
                 t.bad_only = false;
+                t.sigma.set_focus(None);
                 // The search text is a filter too; the "only matches" box
                 // keeps the user's choice (D-040).
                 if t.search_filter {
@@ -964,7 +1046,9 @@ impl App {
         let mut invert_query = false;
         let has_chips = t.filters.iter().any(ColFilter::is_active)
             || t.query.residual.is_some()
+            || t.sigma.focus.is_some()
             || !t.sort.is_empty();
+        let mut sigma_chip = Chip::None;
         // Always one line (even empty) so the grid does not jump when the
         // first filter or sort appears.
         ui.horizontal_wrapped(|ui| {
@@ -1071,6 +1155,16 @@ impl App {
                         Chip::None => {}
                     }
                 }
+                if let Some(label) = t.sigma.focus_label() {
+                    sigma_chip = chip(
+                        ui,
+                        if t.sigma.focus_not { format!("not {label}") } else { label },
+                        "",
+                        t.sigma.focus_not,
+                        "rows of the Sigma detections picked in the Detections panel. \
+                         Click: invert (rows without them), x: remove",
+                    );
+                }
                 if !t.sort.is_empty() {
                     let s: Vec<String> = t
                         .sort
@@ -1087,6 +1181,17 @@ impl App {
                 }
             }
         });
+        match sigma_chip {
+            Chip::Invert => {
+                t.sigma.focus_not = !t.sigma.focus_not;
+                t.requery();
+            }
+            Chip::Remove => {
+                t.sigma.set_focus(None);
+                t.requery();
+            }
+            Chip::None => {}
+        }
         if remove_query || invert_query {
             let r = t
                 .query
@@ -1154,6 +1259,20 @@ impl App {
                 );
             }
             ui.separator();
+            if t.progress_text().is_none()
+                && let Some((what, frac)) = t.sigma.progress()
+            {
+                ui.add(
+                    egui::ProgressBar::new(frac)
+                        .desired_width(140.0)
+                        .show_percentage(),
+                );
+                ui.label(what);
+                if ui.small_button("cancel (Esc)").clicked() {
+                    t.sigma.cancel();
+                }
+                ui.separator();
+            }
             if let Some((what, frac)) = t.progress_text() {
                 if frac >= 0.0 {
                     ui.add(egui::ProgressBar::new(frac).desired_width(140.0).text(what));
@@ -1290,6 +1409,7 @@ impl App {
         if let Some(note) = t.tags.get(&row).filter(|n| !n.is_empty()) {
             ui.label(RichText::new(format!("note: {note}")).italics());
         }
+        crate::sigma_ui::detail(ui, t, row);
         let kinds = t.table.column_index();
         // The field of the active cell, or the one picked here (D-062).
         let at = (t.grid.selected, t.grid.selected_col);
@@ -1663,7 +1783,7 @@ impl App {
             let tz = &self.tz;
             // The grid state lives in the tab, which the source borrows.
             let mut gs = std::mem::take(&mut t.grid);
-            let mut src = t.source(tz, tagged);
+            let mut src = t.source(tz, tagged, self.settings.sigma.tint_level);
             let r = grid::show(
                 ui,
                 egui::Id::unique(("grid", self.active)),
@@ -3019,9 +3139,11 @@ impl eframe::App for App {
         }
         let tz = self.tz.name.clone();
         let mut running = self.poll_conversions();
+        running |= self.sigma.poll(&self.settings.sigma);
         let mut clips = Vec::new();
         for t in &mut self.tabs {
             running |= t.poll(&tz);
+            running |= crate::sigma::poll(t);
             t.set_rules(self.rules.clone());
             t.groups.new_collapsed = self.settings.group_collapsed;
             t.groups.new_sort = self.settings.group_sort;
@@ -3048,12 +3170,31 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
         }
 
+        self.auto_detect_step();
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         if !self.tabs.is_empty() {
             egui::Panel::top("tabs").show(ui, |ui| self.tabs_bar(ui));
             egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
         }
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        let show_sigma = self.tab_ref().is_some_and(|t| t.sigma.panel);
+        if show_sigma {
+            egui::Panel::left("sigma")
+                .resizable(true)
+                .default_size(320.0)
+                .min_size(220.0)
+                .show(ui, |ui| {
+                    if let Some(t) = self.tabs.get_mut(self.active) {
+                        let (act, changed) = crate::sigma_ui::panel(ui, t, &self.sigma);
+                        if changed {
+                            t.requery();
+                        }
+                        if act == Some(crate::sigma_ui::Action::Run) {
+                            self.run_sigma();
+                        }
+                    }
+                });
+        }
         if self.settings.detail_pane && !self.tabs.is_empty() {
             egui::Panel::right("detail")
                 .resizable(true)
@@ -3077,7 +3218,29 @@ impl eframe::App for App {
             self.rules_changed();
         }
 
-        self.appearance.settings_window(&ctx, &mut self.settings);
+        if self.sigma_scroll {
+            self.appearance.settings_open = true;
+        }
+        let lib = &mut self.sigma;
+        let mut sigma_changed = false;
+        let scroll = &mut self.sigma_scroll;
+        self.appearance
+            .settings_window(&ctx, &mut self.settings, &mut |ui, s| {
+                let jump = std::mem::take(scroll);
+                let r =
+                    egui::CollapsingHeader::new(RichText::new("Detection rules (Sigma)").strong())
+                        .default_open(true)
+                        .open(jump.then_some(true))
+                        .show(ui, |ui| {
+                            sigma_changed |= crate::sigma_ui::settings(ui, &mut s.sigma, lib);
+                        });
+                if jump {
+                    r.header_response.scroll_to_me(Some(egui::Align::TOP));
+                }
+            });
+        if sigma_changed {
+            self.settings.save();
+        }
         if let Some((_, ui_ms, _)) = &mut self.bench
             && self
                 .tabs
@@ -3090,6 +3253,44 @@ impl eframe::App for App {
 }
 
 impl App {
+    fn auto_detect_step(&mut self) {
+        let Some(stage) = self.auto_detect else {
+            return;
+        };
+        let Some(t) = self.tabs.first() else {
+            return;
+        };
+        match stage {
+            0 if t.ready() && t.job.is_none() && self.sigma.ready().is_some() => {
+                self.active = 0;
+                self.run_sigma();
+                self.auto_detect = Some(1);
+            }
+            1 if !t.sigma.running() && t.sigma.result.is_some() => {
+                let t = &mut self.tabs[0];
+                if let Some(res) = &t.sigma.result {
+                    eprintln!(
+                        "detection: {} rows detected, {} rows read, {:.0} ms",
+                        res.all.len(),
+                        res.read,
+                        res.ms
+                    );
+                    let row = (1..=5u8).rev().find_map(|l| res.level[l as usize].min());
+                    if let Some(p) = row.and_then(|r| t.view.position_of(r)) {
+                        t.grid.selected = Some(p);
+                        t.grid.top = (p as f64 - 5.0).max(0.0);
+                    }
+                }
+                // FHV_AUTO_DETECT=settings: also show the rules settings.
+                if std::env::var("FHV_AUTO_DETECT").is_ok_and(|v| v == "settings") {
+                    self.open_rules_settings();
+                }
+                self.auto_detect = None;
+            }
+            _ => {}
+        }
+    }
+
     /// 40 frames of smooth scrolling (3 rows/frame), then 10 jumps, once the
     /// first tab is ready.
     fn bench_step(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {

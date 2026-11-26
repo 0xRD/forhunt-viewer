@@ -302,3 +302,20 @@ not re-measured for this change. A first version cost 35 ms on the forhunt
 file; parsing a number once for all epoch units, retrying day-first only for
 cells starting with a digit, and rejecting words longer than any month name
 brought it to the figures above.
+
+## Sigma detection (2026-11-26, D-104)
+
+4-core cloud VM, release build, rules: hayabusa-rules at fefb31c (4,581 rules
+at level low and above, 4,686 with informational).
+
+| Input | Rows | Rows read | Detected rows | Time |
+|---|---:|---:|---:|---:|
+| Hayabusa sample logs, `forhunt parse -F csv` (72 MB) | 47,685 | 47,685 | 8,080 | 0.33 s |
+| `csv-gen --layout forhunt --size 1G` | 1,654,784 | 1,654,784 | 386,220 | 4.9 s |
+
+Rules load in 0.2 s (background thread, once for all tabs). Every row is read
+with this rule set because two rules apply to any channel; rule sets that name
+channels and event ids skip the other rows without reading them. Command:
+`FHV_SIGMA_CSV=<csv> FHV_SIGMA_RULES=<hayabusa-rules> cargo test --release -p
+fhv-app same_detections -- --ignored --nocapture` (add `FHV_SIGMA_CLI=<forhunt
+sigma -F jsonl -n 0 output>` to compare with forhunt).

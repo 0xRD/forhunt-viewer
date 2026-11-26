@@ -165,6 +165,32 @@ All data in the screenshots is synthetic (`tools/csv-gen`).
   columns are counted from their index; others are read in a parallel
   pass with progress (Esc cancels). Past 1,000,000 groups the grouping is
   refused with a warning in the group bar.
+- **Sigma detection.** Run 4,000+ Sigma and Hayabusa rules over a timeline,
+  with forhunt's engine built in (no Hayabusa, nothing to install):
+  - *Settings > Detection rules*: **Download rules** fetches Yamato Security's
+    [hayabusa-rules](https://github.com/Yamato-Security/hayabusa-rules)
+    (SigmaHQ rules included; Detection Rule License 1.1) on request, *Update*
+    refreshes them; add folders of your own rules; minimum level, noisy rules.
+  - **Detect** in the toolbar (or *Detection > Run Sigma detection*,
+    Ctrl+Shift+D) runs them over the whole file in the background (progress,
+    Esc cancels). Explicit by design: nothing runs on its own.
+  - Matched rows get a mark of their most severe level in the row gutter and,
+    from a level you choose (default medium), a fill of the level color, so
+    detections stay visible among the events around them. Your coloring rules
+    win over the fill. Cells of the fields a rule tests are marked too.
+  - The **Detections panel** lists the rules that matched, by level, with
+    counts: click a rule or a level to filter the view to its rows (a chip you
+    can invert or remove like any filter).
+  - The **detail pane** shows the selected row's rules: title, level, author
+    (the rule licence asks for it), description, ATT&CK, false positives and
+    references.
+  - Works on forhunt and EvtxECmd CSVs (event fields from `Payload`) and on
+    any CSV whose columns are named like event fields. The rows a rule cannot
+    match are not read (`Channel` / `EventId` dictionaries). 1.65 M rows with
+    the full rule set: 4.9 s on 4 cores. Results are the same as `forhunt sigma`
+    on the logs themselves.
+
+  ![Sigma detections: panel by level, gutter marks, rules of the selected row](docs/screenshots/sigma.png)
 - **Tags and notes** on rows; "tagged only" filter.
 - **Bad rows** (wrong field count, broken quotes) are counted and can be
   shown. A malformed file never crashes the viewer.
@@ -382,6 +408,7 @@ TargetUserName is not blank AND NOT (IpAddress = "-" OR IpAddress = "::1")
 | Ctrl+F | global search |
 | Ctrl+L | query bar (Enter applies, Tab completes, Esc reverts) |
 | Ctrl+D | show / hide the detail pane (or its × button) |
+| Ctrl+Shift+D | run Sigma detection (no rules yet: opens Settings > Detection rules) |
 | F3 / Shift+F3 | next / previous match |
 | Ctrl+G | go to row (`#` column, or the file's own row-number column) |
 | Arrows, PgUp/PgDn, Ctrl+Home/End | move the selection |

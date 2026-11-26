@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.0 (unreleased)
+
+Sigma detection, built in (forhunt 0.8.0's engine; no Hayabusa needed).
+
+- Settings > Detection rules: download Yamato Security's hayabusa-rules (4,000+
+  Sigma and Hayabusa rules, Detection Rule License 1.1) on request, update them,
+  add folders of your own rules, pick the minimum level and noisy rules. Nothing
+  is downloaded until you click.
+- *Detect* (toolbar, Detection menu, Ctrl+Shift+D) runs the rules over the whole
+  file in the background, with progress; Esc cancels.
+- Detected rows: a level mark in the row gutter, a fill of the level color from
+  a chosen level (default medium), marked cells for the fields rules test,
+  tooltips naming the rules.
+- Detections panel: rules by level with counts and a search box; click a rule or
+  a level to filter to its rows (an invertible, removable chip).
+- Detail pane: the selected row's rules with level, author, description, ATT&CK,
+  false positives and references.
+- Works on forhunt and EvtxECmd CSVs (fields from `Payload`) and on CSVs whose
+  columns are event fields. Same results as `forhunt sigma` on the logs.
+
 ## 0.8.0 (2026-11-14)
 
 Audit: the CSV engine fuzzed with 13,000 damaged files (no fault found), the

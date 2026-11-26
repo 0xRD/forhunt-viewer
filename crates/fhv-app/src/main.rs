@@ -25,6 +25,8 @@ mod rules;
 mod selection;
 mod session;
 mod settings;
+mod sigma;
+mod sigma_ui;
 mod tab;
 mod theme;
 mod tz;
@@ -40,6 +42,8 @@ mod ui_tests_groups;
 mod ui_tests_rules;
 #[cfg(test)]
 mod ui_tests_selection;
+#[cfg(test)]
+mod ui_tests_sigma;
 
 use std::path::PathBuf;
 

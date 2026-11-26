@@ -195,15 +195,30 @@ impl State {
         }
     }
 
-    pub fn settings_window(&mut self, ctx: &egui::Context, s: &mut Settings) {
+    /// `extra`: sections owned by the app (Detection rules), shown last.
+    pub fn settings_window(
+        &mut self,
+        ctx: &egui::Context,
+        s: &mut Settings,
+        extra: &mut dyn FnMut(&mut Ui, &mut Settings),
+    ) {
         if !self.settings_open {
             return;
         }
         let mut open = true;
         egui::Window::new("Settings")
             .open(&mut open)
-            .default_width(420.0)
-            .show(ctx, |ui| self.settings_body(ui, s));
+            .default_width(440.0)
+            .default_height(640.0)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("settings_scroll")
+                    .show(ui, |ui| {
+                        self.settings_body(ui, s);
+                        ui.separator();
+                        extra(ui, s);
+                    });
+            });
         if !open {
             self.settings_open = false;
         }

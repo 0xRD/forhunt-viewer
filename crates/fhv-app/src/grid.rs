@@ -45,6 +45,14 @@ pub trait GridSource {
     fn row_color(&self, _row: u64) -> Option<Color32> {
         None
     }
+    /// Optional mark in the row gutter (Sigma detection level).
+    fn row_marker(&self, _row: u64) -> Option<Color32> {
+        None
+    }
+    /// Tooltip of the gutter mark.
+    fn row_marker_tip(&self, _row: u64) -> Option<String> {
+        None
+    }
     /// Optional per-cell style (coloring rules, duplicate / unique values)
     /// of a prepared row. Not applied on the selected row.
     fn cell_style(&self, _row: u64, _col: usize) -> CellStyle {
@@ -857,6 +865,13 @@ pub fn show(
                 visuals.widgets.hovered.bg_fill,
             );
         }
+        if let Some(m) = src.row_marker(row) {
+            let bar = Rect::from_min_size(
+                pos2(gr.min.x + 1.0, gr.min.y + 1.0),
+                vec2(4.0, st.row_h - 2.0),
+            );
+            gutter_p.rect_filled(bar, 1.0, m);
+        }
         if let Some(g) = src.group_row(row) {
             let pair = th.group_header.unwrap_or(th.chip);
             body_p.rect_filled(rr, 0.0, pair.bg.0);
@@ -1118,6 +1133,12 @@ pub fn show(
         && let Some(tip) = src.cell_tip(row, col)
     {
         outer.clone().on_hover_text_at_pointer(tip);
+    }
+    if let Some(row) = gutter_hover
+        && row < n
+        && let Some(tip) = src.row_marker_tip(row)
+    {
+        gutter_resp.clone().on_hover_text_at_pointer(tip);
     }
     let sel = state.selected;
     let sel_col = state.selected_col;

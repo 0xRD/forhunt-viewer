@@ -30,6 +30,13 @@ skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 # HTML copies (#25): already in the tree through eframe's clipboard.
 arboard = { version = "3.7", default-features = false }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-bundle-platform", "tzdb-zoneinfo"] }
+# Sigma rules download (Settings > Detection rules, D-101): HTTPS with
+# rustls + ring and the OS certificate store (corporate roots work, no
+# bundled root list), proxies from HTTPS_PROXY; GitHub serves a tar.gz.
+ureq = { version = "3.5", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["eframe"] }

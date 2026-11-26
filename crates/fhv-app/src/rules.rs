@@ -92,6 +92,16 @@ fn palette(th: &Theme, name: &str) -> Pair {
     th.rules.get(name).unwrap_or(th.rules.gray)
 }
 
+/// Fill of a palette color (Sigma levels use the rule palette too).
+pub fn palette_bg(th: &Theme, name: &str) -> Color32 {
+    palette(th, name).bg.0
+}
+
+/// Text color of a palette color (readable on the theme's background).
+pub fn palette_fg(th: &Theme, name: &str) -> Color32 {
+    palette(th, name).fg.0
+}
+
 /// One condition compiled for this file's columns.
 struct Leaf {
     /// None: any column (`*`), with one compiled predicate per column.
