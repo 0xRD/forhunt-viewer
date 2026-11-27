@@ -12,7 +12,7 @@ use std::ops::Range;
 
 use eframe::egui::{
     Align2, Color32, CursorIcon, FontId, Id, Key, KeyboardShortcut, Modifiers, Pos2, Rect,
-    Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2,
+    Response, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2,
 };
 
 use crate::selection::{CellSel, RowSel};
@@ -309,6 +309,8 @@ pub struct GridResponse {
     pub autosize: Option<usize>,
     /// A group header to open / close: (row, Some(open) or None = toggle).
     pub group_toggle: Option<(u64, Option<bool>)>,
+    /// The … of a cut cell was clicked: show the detail pane (#36).
+    pub open_detail: bool,
 }
 
 pub struct Callbacks<'a> {
@@ -368,9 +370,17 @@ pub fn show(
     let painter = ui.painter_at(full);
 
     let top_h = st.header_h + st.filter_h;
+    // A horizontal scrollbar when the columns are wider than the view (#35).
+    let frozen_w0: f32 = state.widths[..state.frozen.min(ncols)].iter().sum();
+    let scroll_w0: f32 = state.widths[state.frozen.min(ncols)..].iter().sum();
+    let hbar_h = if scroll_w0 > full.width() - st.gutter_w - st.scrollbar_w - frozen_w0 {
+        st.scrollbar_w
+    } else {
+        0.0
+    };
     let body = Rect::from_min_max(
         pos2(full.min.x + st.gutter_w, full.min.y + top_h),
-        pos2(full.max.x - st.scrollbar_w, full.max.y),
+        pos2(full.max.x - st.scrollbar_w, full.max.y - hbar_h),
     );
     let gutter = Rect::from_min_max(pos2(full.min.x, body.min.y), pos2(body.min.x, body.max.y));
     let page = ((body.height() / st.row_h).floor() as u64).max(1);
@@ -736,6 +746,18 @@ pub fn show(
             }
             if h.dragged() {
                 state.widths[c] = (state.widths[c] + h.drag_delta().x).max(24.0);
+                // Past the right edge the grid scrolls and the column keeps
+                // growing, so it can be made wider than the screen (#35).
+                if c >= state.frozen
+                    && let Some(p) = h.interact_pointer_pos()
+                    && p.x > body.max.x - 16.0
+                {
+                    let dt = ui.input(|i| i.stable_dt).min(0.1);
+                    let step = (200.0 + (p.x - (body.max.x - 16.0)) * 20.0) * dt;
+                    state.widths[c] += step;
+                    state.scroll_x += step;
+                    ui.ctx().request_repaint();
+                }
             }
         }
     }
@@ -833,6 +855,9 @@ pub fn show(
     src.prepare(first..first + count);
     let body_p = painter.with_clip_rect(body);
     let text_color = visuals.text_color();
+    let weak_color = visuals.weak_text_color();
+    // Cut cells of this frame: (row, column, … hit area, text clip).
+    let mut cut_cells: Vec<(u64, usize, Rect, Rect)> = Vec::new();
     let stripe = visuals.faint_bg_color;
     let sel_fill = visuals.selection.bg_fill;
     let hl_fill = th.search_hit.0;
@@ -944,8 +969,25 @@ pub fn show(
                 continue;
             }
             let text_color = cs.fg.filter(|_| !selected).unwrap_or(text_color);
+            let galley = body_p.layout_no_wrap(text.to_string(), st.font.clone(), text_color);
+            // Text wider than its column: cut before an … (#36), which
+            // opens the detail pane; the full value shows on hover.
+            let room = cell.width() - 2.0 * st.pad;
+            let cut = galley.size().x > room + 0.5 || text.len() < src.cell(row, c).len();
+            let clip = if cut {
+                let ell = body_p.layout_no_wrap("…".into(), st.font.clone(), weak_color);
+                let ex = cell.max.x - st.pad - ell.size().x;
+                let er =
+                    Rect::from_min_size(pos2(ex, cell.center().y - ell.size().y / 2.0), ell.size());
+                body_p
+                    .with_clip_rect(clip_for(c, cell))
+                    .galley(er.min, ell, weak_color);
+                cut_cells.push((row, c, clip_for(c, er.expand2(vec2(st.pad, 0.0))), clip));
+                Rect::from_min_max(clip.min, pos2(clip.max.x.min(ex - 1.0), clip.max.y))
+            } else {
+                clip
+            };
             let p = body_p.with_clip_rect(clip);
-            let galley = p.layout_no_wrap(text.to_string(), st.font.clone(), text_color);
             let origin = Pos2::new(cell.min.x + st.pad, cell.center().y - galley.size().y / 2.0);
             if !needle.is_empty() {
                 for m in find_all(&text, needle) {
@@ -1090,6 +1132,45 @@ pub fn show(
         visuals.widgets.inactive.bg_fill
     };
     painter.rect_filled(thumb, 3.0, thumb_col);
+
+    // Horizontal scrollbar (#35): drag the thumb, click the track to page.
+    if hbar_h > 0.0 {
+        let hbar = Rect::from_min_max(pos2(frozen_end, body.max.y), pos2(body.max.x, full.max.y));
+        let range = (scroll_w - view_w).max(0.0);
+        let track = hbar.width() - 4.0;
+        let thumb_w = if scroll_w > 0.0 {
+            (track * view_w / scroll_w).clamp(24.0_f32.min(track), track)
+        } else {
+            track
+        };
+        let free = (track - thumb_w).max(1.0);
+        let hx = |sx: f32| hbar.min.x + 2.0 + if range > 0.0 { free * sx / range } else { 0.0 };
+        let hthumb = Rect::from_min_size(
+            pos2(hx(state.scroll_x), hbar.min.y + 2.0),
+            vec2(thumb_w, hbar.height() - 4.0),
+        );
+        let hr = ui.interact(hbar, id.with("hbar"), Sense::click_and_drag());
+        if hr.dragged() {
+            state.scroll_x += hr.drag_delta().x * range / free;
+        } else if hr.clicked()
+            && let Some(p) = hr.interact_pointer_pos()
+            && !hthumb.contains(p)
+        {
+            let page = (view_w * 0.9).max(40.0);
+            state.scroll_x += if p.x < hthumb.min.x { -page } else { page };
+        }
+        state.scroll_x = state.scroll_x.clamp(0.0, range);
+        if hr.dragged() || hr.clicked() {
+            ui.ctx().request_repaint();
+        }
+        painter.rect_filled(hbar, 0.0, visuals.extreme_bg_color);
+        let col = if hr.dragged() || hr.hovered() {
+            visuals.widgets.hovered.bg_fill
+        } else {
+            visuals.widgets.inactive.bg_fill
+        };
+        painter.rect_filled(hthumb, 3.0, col);
+    }
     painter.rect_stroke(
         full,
         0.0,
@@ -1130,9 +1211,44 @@ pub fn show(
     if outer.hovered()
         && let Some(p) = ui.input(|i| i.pointer.hover_pos())
         && let Some((row, col)) = hit(p)
-        && let Some(tip) = src.cell_tip(row, col)
     {
-        outer.clone().on_hover_text_at_pointer(tip);
+        let cut = cut_cells.iter().find(|x| x.0 == row && x.1 == col);
+        let on_ell = cut.is_some_and(|x| x.2.contains(p));
+        if on_ell {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+        let full = cut.map(|_| {
+            // The whole value, bounded (very long cells: the detail pane).
+            let v = src.cell(row, col);
+            let mut t: String = v.chars().take(3000).collect();
+            if t.len() < v.len() {
+                t.push('…');
+            }
+            t
+        });
+        let tip = src.cell_tip(row, col);
+        if full.is_some() || tip.is_some() {
+            outer.clone().on_hover_ui_at_pointer(|ui| {
+                ui.set_max_width(600.0);
+                if let Some(f) = &full {
+                    ui.label(RichText::new(f).font(st.font.clone()));
+                    ui.label(
+                        RichText::new("click … to see it in the detail pane")
+                            .small()
+                            .weak(),
+                    );
+                }
+                if let Some(t) = &tip {
+                    if full.is_some() {
+                        ui.separator();
+                    }
+                    ui.label(t);
+                }
+            });
+        }
+        if on_ell && outer.clicked() {
+            resp.open_detail = true;
+        }
     }
     if let Some(row) = gutter_hover
         && row < n
@@ -1213,7 +1329,11 @@ fn reveal_col(state: &mut GridState, body: Rect, c: usize) {
     let x0: f32 = state.widths[state.frozen..c].iter().sum();
     let x1 = x0 + state.widths[c];
     let view = (body.width() - frozen_w).max(1.0);
-    if x0 < state.scroll_x {
+    if x1 - x0 > view {
+        // Wider than the view: its start (stepping into a very wide cell
+        // used to jump to its end).
+        state.scroll_x = x0;
+    } else if x0 < state.scroll_x {
         state.scroll_x = x0;
     } else if x1 > state.scroll_x + view {
         state.scroll_x = x1 - view;

@@ -231,6 +231,80 @@ fn accept(ui: &Ui, t: &mut Tab, id: egui::Id, item: &str) {
 }
 
 /// The query bar row (and its error / suggestions below it).
+/// The query text in syntax colors; the part the parser stops at is
+/// underlined in the error color.
+fn highlight_job(
+    ui: &Ui,
+    th: &crate::theme::Theme,
+    text: &str,
+    columns: &[String],
+    cs: bool,
+    wrap: f32,
+) -> egui::text::LayoutJob {
+    use egui::text::{LayoutJob, TextFormat};
+    use fhv_engine::query::Hl;
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let plain = ui.visuals().text_color();
+    let err_color = ui.visuals().error_fg_color;
+    // The rule palette's text colors, saturated enough to tell apart (the
+    // dark themes' are pastel, near white); their lightness is kept, so
+    // they stay readable on the theme's field color.
+    let vivid = |c: egui::Color32| -> egui::Color32 {
+        let mut h = egui::ecolor::Hsva::from(c);
+        h.s = h.s.max(0.55);
+        h.into()
+    };
+    let color = |k: Hl| -> egui::Color32 {
+        let r = &th.rules;
+        match k {
+            Hl::Column => vivid(r.blue.fg.0),
+            Hl::Operator => vivid(r.purple.fg.0),
+            Hl::Keyword => vivid(r.orange.fg.0),
+            Hl::Str => vivid(r.green.fg.0),
+            Hl::Escape => vivid(r.teal.fg.0),
+            Hl::Value => plain,
+            Hl::Paren => ui.visuals().weak_text_color(),
+            Hl::Error => err_color,
+        }
+    };
+    // Byte range the parser rejects (an empty one: the end of the text).
+    let bad = match query::parse(text, columns, cs) {
+        Err(e) if e.len > 0 => Some(e.at..e.at + e.len),
+        Err(e) if e.at < text.len() => {
+            let n = text[e.at..].chars().next().map_or(1, char::len_utf8);
+            Some(e.at..e.at + n)
+        }
+        _ => None,
+    };
+    let mut kinds: Vec<Option<Hl>> = vec![None; text.len()];
+    for (r, k) in query::highlight(text) {
+        for x in &mut kinds[r] {
+            *x = Some(k);
+        }
+    }
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = wrap;
+    let mut i = 0;
+    while i < text.len() {
+        let k = kinds[i];
+        let is_bad = bad.as_ref().is_some_and(|b| b.contains(&i));
+        let mut j = i + text[i..].chars().next().map_or(1, char::len_utf8);
+        while j < text.len()
+            && kinds[j] == k
+            && bad.as_ref().is_some_and(|b| b.contains(&j)) == is_bad
+        {
+            j += text[j..].chars().next().map_or(1, char::len_utf8);
+        }
+        let mut f = TextFormat::simple(font.clone(), k.map_or(plain, color));
+        if is_bad {
+            f.underline = egui::Stroke::new(1.5, err_color);
+        }
+        job.append(&text[i..j], 0.0, f);
+        i = j;
+    }
+    job
+}
+
 pub fn ui(ui: &mut Ui, t: &mut Tab, settings: &mut Settings) {
     let id = egui::Id::unique(("query bar", t.path.clone()));
     let had_focus = ui.memory(|m| m.has_focus(id));
@@ -265,10 +339,20 @@ pub fn ui(ui: &mut Ui, t: &mut Tab, settings: &mut Settings) {
             settings.save();
         }
         let w = (ui.available_width() - 150.0).max(200.0);
+        // Syntax colors (#37), and the part the parser cannot read
+        // underlined as you type.
+        let columns = &t.table.columns;
+        let cs = settings.query_case_sensitive;
+        let th = crate::theme::current(ui.ctx());
+        let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+            let job = highlight_job(ui, &th, buf.as_str(), columns, cs, wrap);
+            ui.fonts_mut(|f| f.layout_job(job))
+        };
         let r = ui
             .add(
                 egui::TextEdit::singleline(&mut t.query.text)
                     .id(id)
+                    .layouter(&mut layouter)
                     // Tab completes while there are suggestions.
                     .event_filter(egui::EventFilter {
                         horizontal_arrows: true,
