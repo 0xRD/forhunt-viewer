@@ -39,6 +39,8 @@ mod ui_tests_columns;
 #[cfg(test)]
 mod ui_tests_groups;
 #[cfg(test)]
+mod ui_tests_issues;
+#[cfg(test)]
 mod ui_tests_rules;
 #[cfg(test)]
 mod ui_tests_selection;

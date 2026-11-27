@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.2 (2026-11-27)
+
+Five issues from a review (#33-#37).
+
+- **Detail pane** (#33): when it is closed, a ◀ button at the right edge
+  reopens it.
+- **Auto-size** (#34) fits the widest cell of the whole column, not of a
+  sample: from the column's value index, else a parallel pass over files up
+  to 2 M rows. The 800 px cap is gone (up to the 400 characters a cell shows).
+- **Wide columns** (#35): a horizontal scrollbar (drag, or click the track to
+  page); dragging a column edge past the right of the grid scrolls and keeps
+  widening it; moving into a column wider than the window shows its start.
+- **Cut cells** (#36) end with a muted …; hovering shows the whole value, and
+  a click on the … opens the detail pane.
+- **Query bar** (#37): in double quotes, `\"` and `\\` are escapes (other
+  backslashes stay as written, so paths and regexes are unchanged; single
+  quotes keep everything as written). Syntax colors for columns, operators,
+  quoted text, escapes and AND / OR / NOT, and the part that cannot be read
+  underlined in red as you type. A saved query with `\\` or `\"` inside
+  double quotes now reads them as escapes.
+
 ## 0.9.1 (2026-11-27)
 
 Audit of 0.9.0.

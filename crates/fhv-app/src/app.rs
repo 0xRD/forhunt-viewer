@@ -146,7 +146,7 @@ pub struct App {
     /// "with headers" in the Copy as menus.
     copy_as_headers: bool,
     focus_search: bool,
-    style: Style,
+    pub(crate) style: Style,
     /// Fields of the row shown in the detail pane (read once per row, not
     /// per frame): (file, data row, raw values, displayed values).
     detail: Option<(PathBuf, u32, Vec<String>, Vec<String>)>,
@@ -171,6 +171,9 @@ pub struct App {
     /// settings): run detection on the first tab once it
     /// is ready and select its first detected row (screenshots, timing).
     auto_detect: Option<AutoDetect>,
+    /// Hidden (env FHV_QUERY): query text typed into the first tab's bar,
+    /// not applied (screenshots of the syntax colors).
+    preset_query: Option<String>,
     /// Settings opened for the rules: show their section (scrolled to, open).
     pub(crate) sigma_scroll: bool,
 }
@@ -232,6 +235,7 @@ impl App {
                 started: false,
                 settings: v == "settings",
             }),
+            preset_query: std::env::var("FHV_QUERY").ok(),
             sigma_scroll: false,
             style: Style {
                 filter_h: 24.0,
@@ -1867,6 +1871,11 @@ impl App {
         if let Some(a) = group_action.take() {
             crate::groups::apply(t, a);
         }
+        if resp.open_detail && !self.settings.detail_pane {
+            // The … of a cut cell: its row in the detail pane (#36).
+            self.settings.detail_pane = true;
+            self.settings.save();
+        }
         if let Some(dc) = resp.autosize
             && let Some(c) = t.file_col(dc)
         {
@@ -3183,6 +3192,15 @@ impl eframe::App for App {
         }
 
         self.auto_detect_step();
+        if self.preset_query.is_some()
+            && let Some(t) = self.tabs.first_mut()
+            && let Some(q) = self.preset_query.take()
+        {
+            t.query.text = q;
+            t.query.dirty = true;
+            t.query.stale = false;
+            t.query.focus = true;
+        }
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         if !self.tabs.is_empty() {
             egui::Panel::top("tabs").show(ui, |ui| self.tabs_bar(ui));
@@ -3213,6 +3231,29 @@ impl eframe::App for App {
                 .default_size(380.0)
                 .min_size(240.0)
                 .show(ui, |ui| self.detail_pane(ui));
+        } else if !self.tabs.is_empty() {
+            // Closed: a strip at the right edge reopens it (#33).
+            egui::Panel::right("detail_closed")
+                .resizable(false)
+                .frame(egui::Frame::side_top_panel(ui.style()).inner_margin(4.0))
+                .exact_size(34.0)
+                .show(ui, |ui| {
+                    let key = if cfg!(target_os = "macos") {
+                        "Cmd"
+                    } else {
+                        "Ctrl"
+                    };
+                    let b = ui
+                        .add(egui::Button::new("◀").min_size(egui::vec2(24.0, 28.0)))
+                        .on_hover_text(format!("show the detail pane ({key}+D)"));
+                    b.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, "Show detail pane")
+                    });
+                    if b.clicked() {
+                        self.settings.detail_pane = true;
+                        self.settings.save();
+                    }
+                });
         }
         egui::CentralPanel::default().show(ui, |ui| self.grid(ui));
         self.filter_editor(&ctx);

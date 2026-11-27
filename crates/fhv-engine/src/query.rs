@@ -212,6 +212,17 @@ fn lex(text: &str) -> Result<Vec<Token>, ParseError> {
                 let mut s = String::new();
                 let mut closed = None;
                 while let Some((j, d)) = it.next() {
+                    // In "double quotes", \" and \\ are escapes; any other
+                    // backslash is itself (paths and regexes need no escaping).
+                    if c == '"'
+                        && d == '\\'
+                        && let Some(&(_, e)) = it.peek()
+                        && (e == '"' || e == '\\')
+                    {
+                        it.next();
+                        s.push(e);
+                        continue;
+                    }
                     if d == c {
                         if it.peek().map(|x| x.1) == Some(c) {
                             it.next();
@@ -651,7 +662,9 @@ pub fn normalize(e: Expr) -> Expr {
 }
 
 /// `s` as a query token: bare when it reads back as the same word, else
-/// double-quoted with `"` doubled.
+/// quoted so it reads back unchanged: double quotes with `"` doubled, or,
+/// when a backslash would read as an escape there, single quotes (no
+/// escapes) or double quotes with `\\` and `\"`.
 pub fn quote(s: &str, column: bool) -> String {
     let bare = !s.is_empty()
         && !s.starts_with('\'')
@@ -659,10 +672,208 @@ pub fn quote(s: &str, column: bool) -> String {
         && !KEYWORDS.iter().any(|k| s.eq_ignore_ascii_case(k))
         && !(column && s == "*");
     if bare {
-        s.to_string()
-    } else {
-        format!("\"{}\"", s.replace('"', "\"\""))
+        return s.to_string();
     }
+    let b = s.as_bytes();
+    let escapes = (0..b.len())
+        .any(|i| b[i] == b'\\' && matches!(b.get(i + 1), None | Some(b'"') | Some(b'\\')));
+    if !escapes {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else if !s.contains('\'') {
+        format!("'{s}'")
+    } else {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+}
+
+/// What a piece of query text is, for syntax highlighting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hl {
+    Column,
+    Operator,
+    /// AND, OR, NOT between conditions.
+    Keyword,
+    /// A value, bare or quoted.
+    Value,
+    /// Quoted text (column or value): its quotes and characters.
+    Str,
+    /// `\"`, `\\` or a doubled quote inside quoted text.
+    Escape,
+    Paren,
+    /// Text that cannot be read (unterminated quote, lone `!`).
+    Error,
+}
+
+/// Spans of `text` (byte ranges, in order) and what they are. Never fails:
+/// it reads what it can of an invalid query (the parser's error says why).
+pub fn highlight(text: &str) -> Vec<(std::ops::Range<usize>, Hl)> {
+    #[derive(PartialEq, Clone, Copy)]
+    enum St {
+        Column,
+        Op,
+        Value,
+        List,
+        After,
+    }
+    let ops = [
+        "contains",
+        "startswith",
+        "beginswith",
+        "endswith",
+        "regex",
+        "matches",
+        "in",
+        "is",
+        "blank",
+        "between",
+        "not",
+    ];
+    let mut out: Vec<(std::ops::Range<usize>, Hl)> = Vec::new();
+    let mut st = St::Column;
+    let mut between = false;
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = text[i..].chars().next().unwrap_or(' ');
+        let n = c.len_utf8();
+        if c.is_whitespace() {
+            i += n;
+            continue;
+        }
+        match c {
+            '(' => {
+                out.push((i..i + 1, Hl::Paren));
+                if st == St::Op {
+                    st = St::List;
+                }
+                i += 1;
+            }
+            ')' => {
+                out.push((i..i + 1, Hl::Paren));
+                st = St::After;
+                i += 1;
+            }
+            ',' => {
+                out.push((i..i + 1, Hl::Paren));
+                i += 1;
+            }
+            '=' | '!' | '<' | '>' => {
+                let two = matches!(
+                    (c, b.get(i + 1)),
+                    ('=', Some(b'='))
+                        | ('!', Some(b'='))
+                        | ('<', Some(b'=' | b'>'))
+                        | ('>', Some(b'='))
+                );
+                let len = if two { 2 } else { 1 };
+                let bad = c == '!' && !two;
+                out.push((i..i + len, if bad { Hl::Error } else { Hl::Operator }));
+                st = St::Value;
+                i += len;
+            }
+            '"' | '\'' => {
+                let start = i;
+                let mut j = i + 1;
+                let mut closed = false;
+                let mut esc: Vec<std::ops::Range<usize>> = Vec::new();
+                while j < b.len() {
+                    let d = b[j];
+                    if c == '"' && d == b'\\' && matches!(b.get(j + 1), Some(b'"' | b'\\')) {
+                        esc.push(j..j + 2);
+                        j += 2;
+                    } else if d == c as u8 {
+                        if b.get(j + 1) == Some(&(c as u8)) {
+                            esc.push(j..j + 2);
+                            j += 2;
+                        } else {
+                            j += 1;
+                            closed = true;
+                            break;
+                        }
+                    } else {
+                        j += 1;
+                    }
+                }
+                if !closed {
+                    out.push((start..b.len(), Hl::Error));
+                    break;
+                }
+                let mut k = start;
+                for e in esc {
+                    if e.start > k {
+                        out.push((k..e.start, Hl::Str));
+                    }
+                    out.push((e.clone(), Hl::Escape));
+                    k = e.end;
+                }
+                out.push((k..j, Hl::Str));
+                st = match st {
+                    St::Column => St::Op,
+                    St::List => St::List,
+                    _ => St::After,
+                };
+                i = j;
+            }
+            _ => {
+                let mut j = i;
+                while j < b.len() {
+                    let d = text[j..].chars().next().unwrap_or(' ');
+                    if is_special(d) || d == '\'' {
+                        break;
+                    }
+                    j += d.len_utf8();
+                }
+                if j == i {
+                    j = i + n;
+                }
+                let w = text[i..j].to_ascii_lowercase();
+                let kind = match st {
+                    St::Column if w == "not" => Hl::Keyword,
+                    St::Column => {
+                        st = St::Op;
+                        Hl::Column
+                    }
+                    St::Op if ops.contains(&w.as_str()) => {
+                        match w.as_str() {
+                            // More of the operator follows.
+                            "not" | "is" | "in" => {}
+                            "blank" => st = St::After,
+                            "between" => {
+                                between = true;
+                                st = St::Value;
+                            }
+                            _ => st = St::Value,
+                        }
+                        Hl::Operator
+                    }
+                    St::Op => {
+                        st = St::After;
+                        Hl::Error
+                    }
+                    St::Value | St::List => {
+                        if st == St::Value {
+                            st = St::After;
+                        }
+                        Hl::Value
+                    }
+                    St::After if between && w == "and" => {
+                        between = false;
+                        st = St::Value;
+                        Hl::Operator
+                    }
+                    St::After if w == "cs" || w == "ci" => Hl::Operator,
+                    St::After if w == "and" || w == "or" => {
+                        st = St::Column;
+                        Hl::Keyword
+                    }
+                    St::After => Hl::Error,
+                };
+                out.push((i..j, kind));
+                i = j;
+            }
+        }
+    }
+    out
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1157,6 +1368,96 @@ mod tests {
     }
 
     #[test]
+    fn backslash_escapes_in_double_quotes() {
+        // Issue #37: \" and \\ escape; other backslashes stay as written.
+        assert_eq!(
+            p(r#"Info = "say \"hello\"""#),
+            pred(2, Op::Equals(r#"say "hello""#.into()))
+        );
+        assert_eq!(
+            p(r#"Info = "C:\\path""#),
+            pred(2, Op::Equals(r"C:\path".into()))
+        );
+        assert_eq!(
+            p(r#"Info = "C:\Program Files\x.exe""#),
+            pred(2, Op::Equals(r"C:\Program Files\x.exe".into()))
+        );
+        assert_eq!(p(r#"Info regex "\d+""#), pred(2, Op::Regex(r"\d+".into())));
+        // Single quotes keep everything as written.
+        assert_eq!(p(r"Info = 'a\\b\'"), pred(2, Op::Equals(r"a\\b\".into())));
+        assert_eq!(p(r#"Info = "q""x""#), pred(2, Op::Equals("q\"x".into())));
+        // The printer reads back what it wrote.
+        for v in [
+            r"C:\dir\",
+            r"C:\my dir\",
+            r"x \\y",
+            r#"a\"b"#,
+            r"a\\b",
+            r#"it's \"#,
+            r"C:\Windows",
+        ] {
+            let q = format!("Info = {}", quote(v, false));
+            assert_eq!(p(&q), pred(2, Op::Equals(v.into())), "{q}");
+        }
+        assert_eq!(quote(r"C:\Windows", false), r"C:\Windows");
+        assert_eq!(quote(r"C:\Program Files", false), r#""C:\Program Files""#);
+        assert_eq!(quote(r"C:\dir\", false), r"C:\dir\");
+        assert_eq!(quote(r"C:\my dir\", false), r"'C:\my dir\'");
+    }
+
+    #[test]
+    fn highlight_kinds() {
+        let q = r#"Channel = "a \"b\"" AND NOT (EventID in (1, 2) OR User not startswith x cs) AND T between 1 and 2 AND U is not blank"#;
+        let got: Vec<(&str, Hl)> = highlight(q).into_iter().map(|(r, k)| (&q[r], k)).collect();
+        use Hl::*;
+        assert_eq!(
+            got,
+            vec![
+                ("Channel", Column),
+                ("=", Operator),
+                ("\"a ", Str),
+                ("\\\"", Escape),
+                ("b", Str),
+                ("\\\"", Escape),
+                ("\"", Str),
+                ("AND", Keyword),
+                ("NOT", Keyword),
+                ("(", Paren),
+                ("EventID", Column),
+                ("in", Operator),
+                ("(", Paren),
+                ("1", Value),
+                (",", Paren),
+                ("2", Value),
+                (")", Paren),
+                ("OR", Keyword),
+                ("User", Column),
+                ("not", Operator),
+                ("startswith", Operator),
+                ("x", Value),
+                ("cs", Operator),
+                (")", Paren),
+                ("AND", Keyword),
+                ("T", Column),
+                ("between", Operator),
+                ("1", Value),
+                ("and", Operator),
+                ("2", Value),
+                ("AND", Keyword),
+                ("U", Column),
+                ("is", Operator),
+                ("not", Operator),
+                ("blank", Operator),
+            ]
+        );
+        // Invalid text is marked, never a panic.
+        let bad = highlight(r#"a = "open"#);
+        assert_eq!(bad.last().unwrap().1, Error);
+        assert_eq!(highlight("a ! b")[1].1, Error);
+        assert!(highlight("").is_empty());
+    }
+
+    #[test]
     fn completion() {
         let c = cols();
         assert_eq!(complete("Ch", &c), (0, vec!["Channel".to_string()]));
@@ -1277,6 +1578,15 @@ mod tests {
             prop_assert_eq!(&back, &norm, "{}", text);
             // A normalized tree reads back exactly, and printing is stable.
             prop_assert_eq!(print(&back, &cols, dcs), Some(text));
+        }
+
+        #[test]
+        fn highlight_never_panics(s in "[ a-zA-Z()=!<>,\"'*\\\\é]{0,40}") {
+            let mut end = 0;
+            for (r, _) in highlight(&s) {
+                prop_assert!(r.start >= end && r.end <= s.len() && r.start < r.end);
+                end = r.end;
+            }
         }
 
         #[test]

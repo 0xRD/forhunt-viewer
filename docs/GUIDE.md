@@ -65,7 +65,10 @@ version.
   the drop place, Esc cancels, the grid scrolls near its edges; a click still sorts); dropping
   across the frozen edge moves the edge by one. Double-click a header's right edge, or use
   *Auto-size column* / *Auto-size all columns* in the header menu, to fit the width to the
-  widest value (sample of visible + 256 spread rows, max 800 px). *Freeze N cols* (toolbar, or
+  widest value of the column (its value index when it has one, else every row of files up
+  to 2 M rows, else the visible rows and 256 spread ones), up to the 400 characters a cell
+  shows. Dragging an edge past the right of the grid scrolls and keeps widening the column;
+  a horizontal scrollbar shows when the columns are wider than the window. *Freeze N cols* (toolbar, or
   right-click a header > *Freeze up to here*) pins the first N columns at
   the left while you scroll sideways.
 - **Selection.** Like a spreadsheet: click a cell, drag a rectangle (the
@@ -102,7 +105,10 @@ version.
   follows the arrow keys; click a field name to select that cell in the
   grid (a hidden column's field is highlighted all the same).
   Copy cell / row / column. Close it with its ×, Ctrl+D (View > Detail
-  pane) or Esc over it; it reopens at the same width.
+  pane) or Esc over it; the ◀ button at the right edge, Ctrl+D or View
+  reopen it at the same width.
+- **Cut cells.** A value wider than its column ends with a muted **…**:
+  hover the cell for the whole value, click the … to open the detail pane.
 - **Coloring rules** (View > *Coloring rules…*, or right-click a cell >
   *Color rows like this…*): a condition in the [query language](#query-language)
   (`Info contains Critical`, `EventID in (4624, 4625)`, `* contains mimikatz`
@@ -398,9 +404,14 @@ bare      = char { char } ;  (* no space ( ) , = ! < > " ; not AND / OR / NOT *)
 
 - Keywords are case-insensitive. Precedence: `NOT` > `AND` > `OR`.
 - Quote column names and values with spaces or symbols: `"Event ID" = 4624`,
-  `Path = "C:\Program Files\x.exe"`. Inside quotes, a quote is doubled
-  (`"say ""hi"""`); backslashes are plain characters (paths and regexes
-  need no escaping).
+  `Path = "C:\Program Files\x.exe"`. Inside double quotes, `\"` is a quote
+  and `\\` a backslash (`"say \"hi\""`, `"C:\\path"`); a quote can also be
+  doubled (`"say ""hi"""`). Any other backslash is itself, so paths and
+  regexes need no escaping (`"\d+"`). Single quotes keep everything as
+  written: use them for a regex that needs `\\`.
+- The bar colors column names, operators, quoted text, escapes and AND /
+  OR / NOT as you type, and underlines in red the part it cannot read (an
+  unknown column, a missing value).
 - Column names match exactly, else ignoring case. An unknown column is an
   error that lists the closest names.
 - Case: the **Aa** toggle sets whether conditions match case; `cs` / `ci`
