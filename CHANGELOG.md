@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.1 (2026-11-27)
+
+Audit of 0.9.0.
+
+- A rule file with nested YAML aliases filled the memory, and one with a very
+  deeply nested condition closed the viewer at once (forhunt 0.8.1's engine
+  refuses both, with the reason, like any rule that does not compile).
+- Detail pane: a row's rules are one short entry each (level, name, author; the
+  full rule on hover) in a list of its own that scrolls, so the row's fields
+  stay in view however many rules matched.
+- Detail pane: in a narrow pane the buttons wrap and × no longer covers
+  *copy row*.
+- Detections panel: rules sharing a title (hayabusa-rules converts one Sigma
+  rule per log) name their log, `Sysmon 1 · …` and `Security 4688 · …`.
+- Settings opens below the toolbars instead of over the menu, search and
+  query bars.
+- README cut to one page with current screenshots; the full reference moved
+  to [docs/GUIDE.md](docs/GUIDE.md). Built with forhunt 0.8.1.
+
 ## 0.9.0 (2026-11-26)
 
 Sigma detection, built in (forhunt 0.8.0's engine; no Hayabusa needed).

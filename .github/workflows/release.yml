@@ -143,4 +143,4 @@ jobs:
         run: |
           pre=""; case "$TAG" in *-*) pre="--prerelease";; esac
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "forhunt-viewer $TAG" $pre --notes "Unsigned builds. macOS (Apple Silicon): first launch is blocked; open System Settings > Privacy & Security > Open Anyway (or see the README). Windows: More info > Run anyway. See README for install and Open With setup. SHA-256 of every file in SHA256SUMS."
+            --title "forhunt-viewer $TAG" $pre --notes "Unsigned builds. macOS (Apple Silicon): first launch is blocked; open System Settings > Privacy & Security > Open Anyway (or see the README). Windows: More info > Run anyway. See the README and docs/GUIDE.md for install and Open With setup. SHA-256 of every file in SHA256SUMS."

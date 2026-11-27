@@ -7,6 +7,7 @@ use eframe::egui::{self, Color32, RichText, Ui};
 
 use crate::sigma::{Focus, LEVELS, Library, SigmaSettings, level_color};
 use crate::tab::Tab;
+use std::collections::HashMap;
 
 /// What the toolbar or panel asks the app to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,6 +289,12 @@ pub fn panel(ui: &mut Ui, t: &mut Tab, lib: &Library) -> (Option<Action>, bool) 
         items.push(Item::Rule(i));
     }
     items.push(Item::Credit);
+    // Titles shared by several hit rules (hayabusa-rules converts one Sigma
+    // rule per log: Sysmon 1 and Security 4688): those lines name their log.
+    let mut seen: HashMap<&str, u32> = HashMap::new();
+    for (r, _) in &res.hits {
+        *seen.entry(rules[*r as usize].title.as_str()).or_default() += 1;
+    }
     let row_h = ui.spacing().interact_size.y;
     egui::ScrollArea::vertical()
         .id_salt("sigma_rules")
@@ -311,15 +318,21 @@ pub fn panel(ui: &mut Ui, t: &mut Tab, lib: &Library) -> (Option<Action>, bool) 
                         let rule = &rules[*r as usize];
                         let f = Focus::Rule(*r);
                         let on = focus.as_ref() == Some(&f);
+                        let title = match source_hint(rule) {
+                            Some(h) if seen.get(rule.title.as_str()).is_some_and(|&n| n > 1) => {
+                                format!("{h} · {}", rule.title)
+                            }
+                            _ => rule.title.clone(),
+                        };
                         let label = match res.bursts.get(r) {
                             // A correlation: its bursts, and the rows in them.
                             Some(b) => format!(
                                 "{} ({} × {} rows)",
-                                rule.title,
+                                title,
                                 crate::app::fmt_n(*b as u64),
                                 crate::app::fmt_n(rows.len())
                             ),
-                            None => format!("{} ({})", rule.title, crate::app::fmt_n(rows.len())),
+                            None => format!("{} ({})", title, crate::app::fmt_n(rows.len())),
                         };
                         let resp = ui
                             .horizontal(|ui| {
@@ -351,6 +364,27 @@ pub fn panel(ui: &mut Ui, t: &mut Tab, lib: &Library) -> (Option<Action>, bool) 
 }
 
 /// Licence notice: the rules' authors are credited on every detection.
+/// The log a rule reads, short (`Sysmon 1`, `Security 4688`), when it names one.
+fn source_hint(rule: &forhunt_core::sigma::Rule) -> Option<String> {
+    let [ch] = rule.channels()? else {
+        return None;
+    };
+    let low = ch.to_ascii_lowercase();
+    let name = if low.contains("sysmon") {
+        "Sysmon".to_string()
+    } else {
+        let last = ch
+            .rsplit(['/', '-'])
+            .find(|p| !p.is_empty() && !p.eq_ignore_ascii_case("operational"))?;
+        let mut c = last.chars();
+        c.next()?.to_uppercase().chain(c).collect()
+    };
+    Some(match rule.event_ids() {
+        Some([e]) => format!("{name} {e}"),
+        _ => name,
+    })
+}
+
 pub fn credit(ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -446,13 +480,41 @@ pub fn detail(ui: &mut Ui, t: &Tab, row: u32) {
     .id_salt("sigma_detail")
     .default_open(true)
     .show(ui, |ui| {
-        for (i, r) in rs.iter().enumerate() {
-            if i > 0 {
-                ui.separator();
-            }
-            rule_card(ui, &res.set.rules()[*r as usize], true);
-        }
-        credit(ui);
+        // Per rule its level, name and author (the full card on hover), in a
+        // short scrolled list: the row's fields stay in view however many
+        // rules matched.
+        let row_h = ui.spacing().interact_size.y;
+        egui::ScrollArea::vertical()
+            .id_salt("sigma_detail_rules")
+            .max_height(row_h * 7.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for r in &rs {
+                    let rule = &res.set.rules()[*r as usize];
+                    let resp = ui
+                        .vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 1.0;
+                            ui.horizontal(|ui| {
+                                badge(ui, rule.level);
+                                ui.add(
+                                    egui::Label::new(RichText::new(&rule.title).strong())
+                                        .truncate(),
+                                );
+                            });
+                            if !rule.author.is_empty() {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(format!("by {}", rule.author)).small().weak(),
+                                    )
+                                    .truncate(),
+                                );
+                            }
+                            ui.add_space(3.0);
+                        })
+                        .response;
+                    resp.on_hover_ui(|ui| rule_card(ui, rule, true));
+                }
+            });
     });
     ui.separator();
 }

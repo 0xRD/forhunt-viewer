@@ -1373,28 +1373,38 @@ impl App {
             return;
         };
         let mut close = false;
-        ui.horizontal(|ui| {
-            let num = t.row_number(row);
-            if t.num_col().is_some() {
-                ui.heading(format!("Row {num}"))
-                    .on_hover_text(format!("file row {}", fmt_n(row as u64 + 1)));
-            } else {
-                ui.heading(format!("Row {}", row as u64 + 1));
-            }
-            let tagged = t.tags.contains_key(&row);
-            if ui
-                .button(if tagged { "★ untag" } else { "☆ tag" })
-                .clicked()
-            {
-                t.toggle_tag(row);
-            }
-            if tagged && ui.button("note…").clicked() {
-                self.note_edit = Some((row, t.tags.get(&row).cloned().unwrap_or_default()));
-            }
-            if ui.button("copy row").clicked() {
-                ui.ctx().copy_text(row_tsv(t, fields));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // The title and buttons wrap in the width left of the close button
+        // (in a narrow pane × used to sit over them).
+        ui.horizontal_top(|ui| {
+            let close_w = ui.spacing().interact_size.y + ui.spacing().item_spacing.x + 8.0;
+            let w = (ui.available_width() - close_w).max(0.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(w, ui.spacing().interact_size.y),
+                egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
+                |ui| {
+                    let num = t.row_number(row);
+                    if t.num_col().is_some() {
+                        ui.heading(format!("Row {num}"))
+                            .on_hover_text(format!("file row {}", fmt_n(row as u64 + 1)));
+                    } else {
+                        ui.heading(format!("Row {}", row as u64 + 1));
+                    }
+                    let tagged = t.tags.contains_key(&row);
+                    if ui
+                        .button(if tagged { "★ untag" } else { "☆ tag" })
+                        .clicked()
+                    {
+                        t.toggle_tag(row);
+                    }
+                    if tagged && ui.button("note…").clicked() {
+                        self.note_edit = Some((row, t.tags.get(&row).cloned().unwrap_or_default()));
+                    }
+                    if ui.button("copy row").clicked() {
+                        ui.ctx().copy_text(row_tsv(t, fields));
+                    }
+                },
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                 let r = ui.button("×");
                 r.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::Role::Button, true, "Close detail pane")
