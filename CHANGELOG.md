@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.1 (unreleased)
+## 0.9.1 (2026-11-27)
 
 Audit of 0.9.0.
 
@@ -14,7 +14,10 @@ Audit of 0.9.0.
   *copy row*.
 - Detections panel: rules sharing a title (hayabusa-rules converts one Sigma
   rule per log) name their log, `Sysmon 1 · …` and `Security 4688 · …`.
-- Settings opens below the menu bar instead of over it.
+- Settings opens below the toolbars instead of over the menu, search and
+  query bars.
+- README cut to one page with current screenshots; the full reference moved
+  to [docs/GUIDE.md](docs/GUIDE.md). Built with forhunt 0.8.1.
 
 ## 0.9.0 (2026-11-26)
 
