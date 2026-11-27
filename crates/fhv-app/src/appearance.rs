@@ -210,6 +210,8 @@ impl State {
             .open(&mut open)
             .default_width(440.0)
             .default_height(640.0)
+            // Below the menu bar and toolbars, not over them.
+            .default_pos([24.0, 64.0])
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt("settings_scroll")
